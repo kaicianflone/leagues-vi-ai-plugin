@@ -20,7 +20,7 @@ public class AsciiSpriteRenderer extends JPanel {
     private final Map<AnimationType, SpriteAnimation> animations = new EnumMap<>(AnimationType.class);
     private AnimationType currentType = AnimationType.IDLE;
     private int currentFrame = 0;
-    private final Timer timer;
+    private Timer timer;
 
     public AsciiSpriteRenderer(int frameIntervalMs) {
         setBackground(BACKGROUND_COLOR);
@@ -48,11 +48,23 @@ public class AsciiSpriteRenderer extends JPanel {
     }
 
     public void pause() {
-        timer.stop();
+        if (timer != null) {
+            timer.stop();
+        }
     }
 
     public void resume() {
-        timer.start();
+        if (timer != null) {
+            timer.start();
+        }
+    }
+
+    /** Stop and release the animation timer. Safe to call multiple times. */
+    public void dispose() {
+        if (timer != null) {
+            timer.stop();
+            timer = null;
+        }
     }
 
     @Override

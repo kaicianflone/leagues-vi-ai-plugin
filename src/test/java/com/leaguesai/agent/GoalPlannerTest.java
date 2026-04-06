@@ -185,4 +185,23 @@ public class GoalPlannerTest {
         assertNotNull("DAG result should not be null", dagResult);
         assertTrue("DAG result should be empty", dagResult.isEmpty());
     }
+
+    @Test
+    public void testBuildDagNullInputs() {
+        // Both null
+        List<Task> r1 = planner.buildDag(null, null);
+        assertNotNull(r1);
+        assertTrue(r1.isEmpty());
+
+        // Null targets, real completed set
+        List<Task> r2 = planner.buildDag(null, Collections.singleton("A"));
+        assertNotNull(r2);
+        assertTrue(r2.isEmpty());
+
+        // Real targets, null completed set
+        List<Task> r3 = planner.buildDag(Collections.singletonList(taskA), null);
+        assertNotNull(r3);
+        assertEquals(1, r3.size());
+        assertEquals("A", r3.get(0).getId());
+    }
 }

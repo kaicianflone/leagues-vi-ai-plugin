@@ -64,18 +64,21 @@ public class LeaguesAiPlugin extends Plugin {
 
     private LeaguesAiPanel panel;
     private NavigationButton navButton;
-    private final ExecutorService llmExecutor = Executors.newSingleThreadExecutor();
+    private ExecutorService llmExecutor;
 
     // Services constructed at runtime (need config/loaded data)
-    private TaskRepositoryImpl taskRepo;
-    private VectorIndex vectorIndex;
-    private OpenAiClient openAiClient;
-    private ChatService chatService;
-    private AdviceService adviceService;
+    private volatile TaskRepositoryImpl taskRepo;
+    private volatile VectorIndex vectorIndex;
+    private volatile OpenAiClient openAiClient;
+    private volatile ChatService chatService;
+    private volatile AdviceService adviceService;
 
     @Override
     protected void startUp() throws Exception {
         log.info("Leagues AI starting...");
+
+        // Re-initialise the executor so re-enable after shutDown() works.
+        llmExecutor = Executors.newSingleThreadExecutor();
 
         // Create panel immediately so the sidebar is available while data loads
         panel = new LeaguesAiPanel(config.animationSpeed());
@@ -253,11 +256,20 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.remove(widgetOverlay);
 
         overlayController.clearAll();
+
+        // Stop the sprite animation timer before disposing the panel.
+        if (panel != null && panel.getSpriteRenderer() != null) {
+            panel.getSpriteRenderer().dispose();
+        }
+
         clientToolbar.removeNavigation(navButton);
 
-        llmExecutor.shutdown();
-        if (!llmExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-            llmExecutor.shutdownNow();
+        if (llmExecutor != null) {
+            llmExecutor.shutdown();
+            if (!llmExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                llmExecutor.shutdownNow();
+            }
+            llmExecutor = null;
         }
 
         log.info("Leagues AI stopped");

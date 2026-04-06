@@ -5,6 +5,7 @@ import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.Player;
 import net.runelite.api.Skill;
 
 import javax.inject.Inject;
@@ -36,6 +37,9 @@ public class PlayerContextAssembler {
     }
 
     public PlayerContext assemble() {
+        Player localPlayer = client.getLocalPlayer();
+        int combatLevel = localPlayer != null ? localPlayer.getCombatLevel() : 0;
+
         return PlayerContext.builder()
                 .levels(getSkillLevels())
                 .xp(getSkillXp())
@@ -45,7 +49,7 @@ public class PlayerContextAssembler {
                 .unlockedAreas(new HashSet<>(unlockedAreas))
                 .location(locationMonitor.getCurrentLocation())
                 .leaguePoints(0) // TODO: requires unknown varbit
-                .combatLevel(client.getLocalPlayer() != null ? client.getLocalPlayer().getCombatLevel() : 0)
+                .combatLevel(combatLevel)
                 .currentGoal(currentGoal)
                 .currentPlan(new ArrayList<>(currentPlan))
                 .build();

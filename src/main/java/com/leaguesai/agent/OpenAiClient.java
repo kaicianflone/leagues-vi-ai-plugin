@@ -99,7 +99,9 @@ public class OpenAiClient {
      */
     public float[] getEmbedding(String text) throws IOException {
         JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("model", model);
+        // OpenAI's embeddings endpoint rejects chat models. Hardcode the
+        // dedicated embedding model regardless of the configured chat model.
+        requestBody.addProperty("model", "text-embedding-3-small");
         requestBody.addProperty("input", text);
 
         Request request = new Request.Builder()

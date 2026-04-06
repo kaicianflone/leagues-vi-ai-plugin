@@ -1,5 +1,6 @@
 package com.leaguesai.overlay;
 
+import com.google.inject.Inject;
 import com.leaguesai.LeaguesAiConfig;
 import lombok.Getter;
 import net.runelite.api.Client;
@@ -7,7 +8,6 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 
-import javax.inject.Inject;
 import java.awt.image.BufferedImage;
 
 /**
@@ -18,7 +18,7 @@ public class WorldMapOverlay {
 
     private final Client client;
     private final LeaguesAiConfig config;
-    private final WorldMapPointManager manager;
+    private WorldMapPointManager manager;
 
     @Getter
     private WorldMapPoint currentPoint;
@@ -27,15 +27,25 @@ public class WorldMapOverlay {
     private WorldPoint targetPoint;
 
     @Inject
+    public WorldMapOverlay(Client client, LeaguesAiConfig config) {
+        this(client, config, null);
+    }
+
+    /** Test constructor: pass an explicit manager (or null for no-op mode). */
     public WorldMapOverlay(Client client, LeaguesAiConfig config, WorldMapPointManager manager) {
         this.client = client;
         this.config = config;
         this.manager = manager;
     }
 
-    /** Test/no-manager constructor: world-map updates become no-ops. */
-    public WorldMapOverlay(Client client, LeaguesAiConfig config) {
-        this(client, config, null);
+    /**
+     * Optional manager injection: if {@link WorldMapPointManager} is bound in
+     * the Guice context (i.e. running inside RuneLite), Guice will call this
+     * method. Otherwise the field stays null and world-map updates are no-ops.
+     */
+    @Inject(optional = true)
+    public void setManager(WorldMapPointManager manager) {
+        this.manager = manager;
     }
 
     public void update(WorldPoint point, BufferedImage icon) {

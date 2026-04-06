@@ -115,8 +115,25 @@ public class WikiScraper {
                 }
 
                 try {
-                    writer.upsertTask(name, description, difficulty, points, area,
-                            skillsReq, location, embedding, url);
+                    String skillsJson   = SqliteWriter.stringIntMapToJson(skillsReq);
+                    String locationJson = SqliteWriter.locationToJson(location);
+                    writer.upsertTask(
+                            name,
+                            description,
+                            difficulty,
+                            points,
+                            area,
+                            null,            // category — not parsed from wiki yet
+                            skillsJson,
+                            null,            // quests_required
+                            null,            // tasks_required
+                            null,            // items_required
+                            locationJson,
+                            null,            // target_npcs
+                            null,            // target_objects
+                            null,            // target_items
+                            url,
+                            embedding);
                     totalTasks++;
                     System.out.println("  [OK] " + name);
                 } catch (SQLException e) {

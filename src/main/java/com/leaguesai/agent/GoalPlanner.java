@@ -24,6 +24,9 @@ public class GoalPlanner {
      * Returns tasks in discovery order.
      */
     public List<Task> buildDag(List<Task> targetTasks, Set<String> completedTaskIds) {
+        if (targetTasks == null) targetTasks = Collections.emptyList();
+        if (completedTaskIds == null) completedTaskIds = Collections.emptySet();
+
         LinkedHashMap<String, Task> discovered = new LinkedHashMap<>();
         Deque<Task> queue = new ArrayDeque<>(targetTasks);
 

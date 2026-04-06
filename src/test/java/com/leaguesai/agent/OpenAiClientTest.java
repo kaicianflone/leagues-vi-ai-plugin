@@ -71,6 +71,24 @@ public class OpenAiClientTest {
     }
 
     @Test
+    public void testGetEmbeddingUsesDedicatedEmbeddingModel() throws Exception {
+        // Configured chat model is "gpt-4" — embeddings must NOT use it.
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"data\":[{\"embedding\":[0.1,0.2,0.3]}]}"));
+
+        client.getEmbedding("hello world");
+
+        RecordedRequest request = server.takeRequest();
+        String body = request.getBody().readUtf8();
+        assertTrue("embedding request must use text-embedding-3-small, body=" + body,
+                body.contains("\"model\":\"text-embedding-3-small\""));
+        assertFalse("embedding request must not reuse the chat model, body=" + body,
+                body.contains("\"model\":\"gpt-4\""));
+    }
+
+    @Test
     public void testRetryOn429() throws Exception {
         server.enqueue(new MockResponse()
                 .setResponseCode(429)
