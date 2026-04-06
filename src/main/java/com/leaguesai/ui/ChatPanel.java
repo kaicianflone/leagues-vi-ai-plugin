@@ -114,7 +114,12 @@ public class ChatPanel extends JPanel {
             clearEmptyStateIfPresent();
             boolean isUser = "You".equalsIgnoreCase(sender);
             JPanel bubble = createBubble(message, isUser);
-            JPanel row = new JPanel();
+            JPanel row = new JPanel() {
+                @Override
+                public Dimension getMaximumSize() {
+                    return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+                }
+            };
             row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
             row.setBackground(messageList.getBackground());
             row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -158,12 +163,19 @@ public class ChatPanel extends JPanel {
         textArea.setPreferredSize(new Dimension(BUBBLE_MAX_WIDTH, height));
 
         bubble.add(textArea, BorderLayout.CENTER);
-        bubble.setMaximumSize(new Dimension(BUBBLE_MAX_WIDTH + 24, Integer.MAX_VALUE));
+        Dimension bubblePref = new Dimension(BUBBLE_MAX_WIDTH + 24, height + 16);
+        bubble.setPreferredSize(bubblePref);
+        bubble.setMaximumSize(bubblePref);
         return bubble;
     }
 
     private void appendEmptyState() {
-        emptyStatePanel = new JPanel();
+        emptyStatePanel = new JPanel() {
+            @Override
+            public Dimension getMaximumSize() {
+                return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+            }
+        };
         emptyStatePanel.setLayout(new BoxLayout(emptyStatePanel, BoxLayout.Y_AXIS));
         emptyStatePanel.setBackground(messageList.getBackground());
         JLabel label = new JLabel("Ask your AI coach anything about Leagues VI...");
@@ -204,8 +216,13 @@ public class ChatPanel extends JPanel {
             label.setForeground(Color.WHITE);
             label.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
             errPanel.add(label, BorderLayout.CENTER);
-            errPanel.setMaximumSize(new Dimension(220, Integer.MAX_VALUE));
-            JPanel row = new JPanel();
+            errPanel.setMaximumSize(new Dimension(220, errPanel.getPreferredSize().height));
+            JPanel row = new JPanel() {
+                @Override
+                public Dimension getMaximumSize() {
+                    return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+                }
+            };
             row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
             row.setBackground(messageList.getBackground());
             row.add(errPanel);

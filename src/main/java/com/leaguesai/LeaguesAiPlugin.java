@@ -203,7 +203,7 @@ public class LeaguesAiPlugin extends Plugin {
                     panel.getSettingsPanel().setDatabaseStatus(
                         "Database: " + tasks.size() + " tasks loaded", false);
                 }
-                if (apiKey == null || apiKey.isEmpty()) {
+                if (!codexModeFinal && (apiKey == null || apiKey.isEmpty())) {
                     panel.getChatPanel().showError("No API key set. Add it in Settings.");
                 }
             });

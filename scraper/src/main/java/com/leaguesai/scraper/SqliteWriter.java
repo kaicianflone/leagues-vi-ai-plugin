@@ -133,7 +133,34 @@ public class SqliteWriter {
             byte[] embedding
     ) throws SQLException {
         String id = UUID.nameUUIDFromBytes(name.getBytes()).toString();
+        upsertTaskWithId(id, name, description, difficulty, points, area, category,
+                skillsRequired, questsRequired, tasksRequired, itemsRequired,
+                location, targetNpcs, targetObjects, targetItems, wikiUrl, embedding);
+    }
 
+    /**
+     * Upsert variant that takes an explicit ID (e.g. wiki data-taskid). Use this
+     * when you have a stable upstream identifier instead of hashing the name.
+     */
+    public void upsertTaskWithId(
+            String id,
+            String name,
+            String description,
+            String difficulty,
+            int points,
+            String area,
+            String category,
+            String skillsRequired,
+            String questsRequired,
+            String tasksRequired,
+            String itemsRequired,
+            String location,
+            String targetNpcs,
+            String targetObjects,
+            String targetItems,
+            String wikiUrl,
+            byte[] embedding
+    ) throws SQLException {
         String sql =
             "INSERT OR REPLACE INTO tasks " +
             "(id, name, description, difficulty, points, area, category, " +

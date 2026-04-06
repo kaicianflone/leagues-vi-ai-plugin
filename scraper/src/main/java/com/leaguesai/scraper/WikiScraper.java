@@ -24,29 +24,38 @@ public class WikiScraper {
     private static final String WIKI_BASE = "https://oldschool.runescape.wiki/w/";
 
     // Leagues V placeholder pages — swap paths for Leagues VI on launch day.
+    // The Trailblazer Reloaded wiki uses a single tasks page with all areas.
     private static final String[] TASK_PAGES = {
-        "Trailblazer_Reloaded_League/Tasks/Misthalin",
-        "Trailblazer_Reloaded_League/Tasks/Karamja",
-        "Trailblazer_Reloaded_League/Tasks/Asgarnia",
+        "Trailblazer_Reloaded_League/Tasks",
     };
 
     /** Rate-limit delay between embedding API calls (milliseconds). */
     private static final long EMBEDDING_SLEEP_MS = 100;
 
     public static void main(String[] args) {
-        if (args.length < 2) {
-            System.err.println("Usage: WikiScraper <openai-api-key> <output-db-path>");
+        if (args.length < 1) {
+            System.err.println("Usage: WikiScraper <output-db-path> [openai-api-key]");
+            System.err.println("  If no API key is provided, embeddings will be skipped");
+            System.err.println("  (vector search disabled, but tasks/areas/relics still load).");
             System.exit(1);
         }
 
-        String apiKey    = args[0];
-        String dbPath    = args[1];
+        String dbPath = args[0];
+        String apiKey = args.length >= 2 ? args[1] : null;
 
         File dbFile = new File(dbPath);
-        dbFile.getParentFile().mkdirs();
+        File parent = dbFile.getParentFile();
+        if (parent != null) {
+            parent.mkdirs();
+        }
 
-        SqliteWriter      writer    = new SqliteWriter(dbFile);
-        EmbeddingGenerator embedder = new EmbeddingGenerator(apiKey);
+        SqliteWriter writer = new SqliteWriter(dbFile);
+        EmbeddingGenerator embedder = (apiKey != null && !apiKey.isEmpty())
+                ? new EmbeddingGenerator(apiKey)
+                : null;
+        if (embedder == null) {
+            System.out.println("No API key provided — skipping embedding generation.");
+        }
 
         try {
             writer.initialize();
@@ -77,52 +86,56 @@ public class WikiScraper {
                 continue;
             }
 
-            List<Map<String, String>> rows = HtmlParser.parseTaskTable(html);
+            List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(html);
             System.out.println("  Found " + rows.size() + " task rows");
 
-            for (Map<String, String> row : rows) {
-                String name        = row.getOrDefault("Task", row.getOrDefault("Name", ""));
-                String description = row.getOrDefault("Description", row.getOrDefault("Details", ""));
-                String rawDiff     = row.getOrDefault("Difficulty", "");
-                String rawPoints   = row.getOrDefault("Points", "0");
-                String rawSkills   = row.getOrDefault("Requirements", row.getOrDefault("Skills", ""));
+            for (HtmlParser.TaskRow row : rows) {
+                String name        = row.name;
+                String description = row.description;
+                String difficulty  = row.difficulty;
+                int    points      = row.points;
+                String rowArea     = row.area != null && !row.area.isEmpty() ? row.area : area;
+                Map<String, Integer> skillsReq = TaskNormalizer.parseSkillRequirements(
+                        row.requirements != null ? row.requirements : "");
 
-                if (name.isEmpty()) {
-                    continue; // skip rows without a task name
+                if (name == null || name.isEmpty()) {
+                    continue;
                 }
-
-                String difficulty = TaskNormalizer.normalizeDifficulty(rawDiff);
-                int    points     = parsePoints(rawPoints);
-                Map<String, Integer> skillsReq = TaskNormalizer.parseSkillRequirements(rawSkills);
 
                 // Resolve location from description or area name
                 int[] location = LocationResolver.resolve(description);
                 if (location == null) {
-                    location = LocationResolver.resolve(area);
+                    location = LocationResolver.resolve(rowArea);
                 }
 
-                // Generate embedding (with rate-limit sleep)
-                String embeddingText = name + ". " + description;
+                // Generate embedding (with rate-limit sleep) — only if embedder available
                 byte[] embedding = null;
-                try {
-                    embedding = embedder.generate(embeddingText);
-                    Thread.sleep(EMBEDDING_SLEEP_MS);
-                } catch (IOException e) {
-                    System.err.println("  WARN embedding failed for '" + name + "': " + e.getMessage());
-                    totalErrors++;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                if (embedder != null) {
+                    String embeddingText = name + ". " + description;
+                    try {
+                        embedding = embedder.generate(embeddingText);
+                        Thread.sleep(EMBEDDING_SLEEP_MS);
+                    } catch (IOException e) {
+                        System.err.println("  WARN embedding failed for '" + name + "': " + e.getMessage());
+                        totalErrors++;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
 
                 try {
                     String skillsJson   = SqliteWriter.stringIntMapToJson(skillsReq);
                     String locationJson = SqliteWriter.locationToJson(location);
-                    writer.upsertTask(
+                    String stableId = (row.taskId != null && !row.taskId.isEmpty())
+                            ? "tbz-" + row.taskId
+                            : java.util.UUID.nameUUIDFromBytes(name.getBytes()).toString();
+                    writer.upsertTaskWithId(
+                            stableId,
                             name,
                             description,
                             difficulty,
                             points,
-                            area,
+                            rowArea,
                             null,            // category — not parsed from wiki yet
                             skillsJson,
                             null,            // quests_required
