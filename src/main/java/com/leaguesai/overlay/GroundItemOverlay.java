@@ -18,6 +18,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -33,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * event-driven cache (ItemSpawned/ItemDespawned) so the render loop is
  * O(matching tiles) instead of O(scene tiles).
  */
+@Singleton
 public class GroundItemOverlay extends Overlay {
 
     private final Client client;

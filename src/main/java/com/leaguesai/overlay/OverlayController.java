@@ -1,9 +1,11 @@
 package com.leaguesai.overlay;
 
 import com.leaguesai.agent.PlannedStep;
+import com.leaguesai.data.model.Task;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.Collections;
 
 @Singleton
 public class OverlayController {
@@ -17,6 +19,7 @@ public class OverlayController {
     private final WorldMapOverlay worldMapOverlay;
     private final PathOverlay pathOverlay;
     private final WidgetOverlay widgetOverlay;
+    private final RequiredItemsOverlay requiredItemsOverlay;
 
     @Inject
     public OverlayController(
@@ -28,7 +31,8 @@ public class OverlayController {
         MinimapOverlay minimapOverlay,
         WorldMapOverlay worldMapOverlay,
         PathOverlay pathOverlay,
-        WidgetOverlay widgetOverlay
+        WidgetOverlay widgetOverlay,
+        RequiredItemsOverlay requiredItemsOverlay
     ) {
         this.tileHighlightOverlay = tileHighlightOverlay;
         this.arrowOverlay = arrowOverlay;
@@ -39,6 +43,7 @@ public class OverlayController {
         this.worldMapOverlay = worldMapOverlay;
         this.pathOverlay = pathOverlay;
         this.widgetOverlay = widgetOverlay;
+        this.requiredItemsOverlay = requiredItemsOverlay;
     }
 
     public void setActiveStep(PlannedStep step) {
@@ -77,6 +82,15 @@ public class OverlayController {
         if (data.getWidgetIds() != null && !data.getWidgetIds().isEmpty()) {
             widgetOverlay.setTargetWidgetIds(data.getWidgetIds());
         }
+
+        // Required items panel — pulled from the task itself, not OverlayData,
+        // because items are intrinsic to the task spec from the scraper.
+        Task task = step.getTask();
+        if (task != null && task.getItemsRequired() != null && !task.getItemsRequired().isEmpty()) {
+            requiredItemsOverlay.setRequiredItems(task.getItemsRequired());
+        } else {
+            requiredItemsOverlay.setRequiredItems(Collections.emptyMap());
+        }
     }
 
     public void clearAll() {
@@ -89,5 +103,6 @@ public class OverlayController {
         worldMapOverlay.clear();
         pathOverlay.clear();
         widgetOverlay.clear();
+        requiredItemsOverlay.clear();
     }
 }

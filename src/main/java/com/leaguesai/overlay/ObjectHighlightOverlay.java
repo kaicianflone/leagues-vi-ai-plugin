@@ -15,6 +15,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
@@ -30,6 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * cache: spawn/despawn events maintain {@link #matchingObjects} so the render
  * loop is O(matches) instead of O(scene tiles).
  */
+@Singleton
 public class ObjectHighlightOverlay extends Overlay {
 
     private final Client client;
