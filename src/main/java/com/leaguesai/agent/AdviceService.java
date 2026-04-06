@@ -7,11 +7,11 @@ import java.util.List;
 @Singleton
 public class AdviceService {
 
-    private final OpenAiClient openAiClient;
+    private final LlmClient openAiClient;
     private final PlayerContextAssembler contextAssembler;
 
     @Inject
-    public AdviceService(OpenAiClient openAiClient, PlayerContextAssembler contextAssembler) {
+    public AdviceService(LlmClient openAiClient, PlayerContextAssembler contextAssembler) {
         this.openAiClient = openAiClient;
         this.contextAssembler = contextAssembler;
     }

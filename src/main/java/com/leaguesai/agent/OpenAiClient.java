@@ -15,7 +15,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public class OpenAiClient {
+public class OpenAiClient implements LlmClient {
 
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final int MAX_RETRIES = 3;
@@ -55,6 +55,7 @@ public class OpenAiClient {
      * otherwise the dispatcher's executor service and idle connections will
      * leak.
      */
+    @Override
     public void close() {
         try {
             httpClient.dispatcher().executorService().shutdown();
@@ -85,6 +86,7 @@ public class OpenAiClient {
     /**
      * Send a chat completion request and return the assistant's reply content.
      */
+    @Override
     public String chatCompletion(String systemPrompt, List<Message> messages) throws IOException {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("model", model);
@@ -123,6 +125,12 @@ public class OpenAiClient {
     /**
      * Request an embedding vector for the given text.
      */
+    @Override
+    public boolean supportsEmbeddings() {
+        return true;
+    }
+
+    @Override
     public float[] getEmbedding(String text) throws IOException {
         JsonObject requestBody = new JsonObject();
         // OpenAI's embeddings endpoint rejects chat models. Hardcode the

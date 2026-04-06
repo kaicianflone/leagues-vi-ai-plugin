@@ -69,13 +69,18 @@ public class LeaguesAiPlugin extends Plugin {
     // Services constructed at runtime (need config/loaded data)
     private volatile TaskRepositoryImpl taskRepo;
     private volatile VectorIndex vectorIndex;
-    private volatile OpenAiClient openAiClient;
+    private volatile LlmClient openAiClient;
     private volatile ChatService chatService;
     private volatile AdviceService adviceService;
 
     // Tracks the API key the current OpenAiClient was built with so we only
     // rebuild (and tear down OkHttp resources) on actual change.
     private volatile String currentApiKey = "";
+
+    // True when the active LlmClient is a CodexOauthClient (ChatGPT OAuth mode).
+    // In that case, the API key field is ignored — we authenticate via
+    // ~/.codex/auth.json instead.
+    private volatile boolean usingCodexOauth = false;
 
     @Override
     protected void startUp() throws Exception {
@@ -136,14 +141,42 @@ public class LeaguesAiPlugin extends Plugin {
             vectorIndex = new VectorIndex(embeddings);
 
             String apiKey = config.openaiApiKey();
-            OpenAiClient previous = openAiClient;
-            openAiClient = new OpenAiClient(apiKey, config.openaiModel());
+            LlmClient previous = openAiClient;
+
+            // Decide auth mode: prefer Codex OAuth if ~/.codex/auth.json exists.
+            LlmClient newClient;
+            boolean codexMode = false;
+            try {
+                if (CodexAuthStore.hasValidAuth()) {
+                    log.info("Using ChatGPT OAuth auth (found ~/.codex/auth.json)");
+                    newClient = new CodexOauthClient("gpt-5-codex");
+                    codexMode = true;
+                } else {
+                    if (apiKey == null || apiKey.isEmpty()) {
+                        log.warn("No OpenAI API key and no Codex auth — chat will not work");
+                    }
+                    log.info("Using OpenAI API key auth");
+                    newClient = new OpenAiClient(apiKey, config.openaiModel());
+                }
+            } catch (Exception e) {
+                log.error("Failed to initialize LLM client", e);
+                newClient = new OpenAiClient(apiKey == null ? "" : apiKey, config.openaiModel());
+            }
+
+            openAiClient = newClient;
+            usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
             adviceService = new AdviceService(openAiClient, contextAssembler);
             if (previous != null) {
                 previous.close();
             }
+
+            final boolean codexModeFinal = codexMode;
+            SwingUtilities.invokeLater(() -> panel.getSettingsPanel().setAuthMode(
+                    codexModeFinal
+                            ? "Auth: ChatGPT OAuth (from ~/.codex/auth.json)"
+                            : "Auth: API Key"));
 
             log.info("Leagues AI: loaded {} tasks, {} areas", tasks.size(), areas.size());
 
@@ -228,12 +261,18 @@ public class LeaguesAiPlugin extends Plugin {
         // every focus/blur leaks a fresh OkHttp dispatcher + connection pool.
         panel.getSettingsPanel().setOnApiKeyChanged(newKey -> {
             String safeKey = newKey != null ? newKey : "";
+            if (usingCodexOauth) {
+                SwingUtilities.invokeLater(() ->
+                    panel.getSettingsPanel().setDatabaseStatus(
+                        "Using ChatGPT OAuth — API key field ignored.", false));
+                return;
+            }
             if (safeKey.equals(currentApiKey)) {
                 return; // no-op, key unchanged
             }
             currentApiKey = safeKey;
             llmExecutor.submit(() -> {
-                OpenAiClient old = openAiClient;
+                LlmClient old = openAiClient;
                 openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);

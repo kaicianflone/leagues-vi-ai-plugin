@@ -16,6 +16,7 @@ public class SettingsPanel extends JPanel {
     private static final Color WARNING_COLOR = new Color(255, 180, 50);
     private static final Color ERROR_TEXT_COLOR = new Color(220, 60, 60);
 
+    private final JLabel authModeLabel;
     private final JPasswordField apiKeyField;
     private final JLabel noApiKeyWarning;
     private final JCheckBox autoModeToggle;
@@ -32,6 +33,14 @@ public class SettingsPanel extends JPanel {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBackground(BACKGROUND_COLOR);
         setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // Active auth mode (set later by the plugin once it picks OAuth vs API key)
+        authModeLabel = new JLabel("Auth: checking...");
+        authModeLabel.setForeground(LABEL_COLOR);
+        authModeLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+        authModeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        add(authModeLabel);
+        add(Box.createVerticalStrut(8));
 
         // API Key section
         JLabel apiKeyLabel = createLabel("OpenAI API Key:");
@@ -187,6 +196,14 @@ public class SettingsPanel extends JPanel {
 
     public void setOnRefreshData(Runnable callback) {
         this.onRefreshData = callback;
+    }
+
+    public void setAuthMode(String label) {
+        authModeLabel.setText(label);
+    }
+
+    public void setAuthModeLabel(String mode) {
+        setAuthMode(mode);
     }
 
     public void setDatabaseStatus(String status, boolean isError) {

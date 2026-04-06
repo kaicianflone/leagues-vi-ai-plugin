@@ -19,7 +19,7 @@ public class ChatService {
 
     static final int MAX_HISTORY = 20;
 
-    private final OpenAiClient openAiClient;
+    private final LlmClient openAiClient;
     private final PlayerContextAssembler contextAssembler;
     private final TaskRepository taskRepo;
     private final VectorIndex vectorIndex;
@@ -29,7 +29,7 @@ public class ChatService {
             Collections.synchronizedList(new ArrayList<>());
 
     @Inject
-    public ChatService(OpenAiClient openAiClient,
+    public ChatService(LlmClient openAiClient,
                        PlayerContextAssembler contextAssembler,
                        TaskRepository taskRepo,
                        VectorIndex vectorIndex) {
@@ -53,7 +53,7 @@ public class ChatService {
         // works without RAG context.
         List<Task> relevantTasks = Collections.emptyList();
         try {
-            if (vectorIndex != null && !vectorIndex.isEmpty()) {
+            if (vectorIndex != null && !vectorIndex.isEmpty() && openAiClient.supportsEmbeddings()) {
                 float[] queryEmbedding = openAiClient.getEmbedding(userMessage);
                 List<String> taskIds = vectorIndex.searchSimilar(queryEmbedding, 5);
                 relevantTasks = taskIds.stream()
