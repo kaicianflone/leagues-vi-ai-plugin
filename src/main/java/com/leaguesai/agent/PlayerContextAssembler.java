@@ -8,13 +8,14 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.game.ItemManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +28,7 @@ public class PlayerContextAssembler {
     private final Client client;
     private final LocationMonitor locationMonitor;
     private final ClientThread clientThread;
+    private final ItemManager itemManager;
 
     // Mutable internal state — writes are synchronized, volatile reads for simple scalars
     private final Set<String> completedTasks = new HashSet<>();
@@ -35,10 +37,12 @@ public class PlayerContextAssembler {
     private volatile List<PlannedStep> currentPlan = new ArrayList<>();
 
     @Inject
-    public PlayerContextAssembler(Client client, LocationMonitor locationMonitor, ClientThread clientThread) {
+    public PlayerContextAssembler(Client client, LocationMonitor locationMonitor, ClientThread clientThread,
+                                  ItemManager itemManager) {
         this.client = client;
         this.locationMonitor = locationMonitor;
         this.clientThread = clientThread;
+        this.itemManager = itemManager;
     }
 
     /**
@@ -114,16 +118,16 @@ public class PlayerContextAssembler {
         return xp;
     }
 
-    private Map<Integer, Integer> getInventory() {
+    private Map<String, Integer> getInventory() {
         return buildItemMap(InventoryID.INVENTORY);
     }
 
-    private Map<Integer, Integer> getEquipment() {
+    private Map<String, Integer> getEquipment() {
         return buildItemMap(InventoryID.EQUIPMENT);
     }
 
-    private Map<Integer, Integer> buildItemMap(InventoryID inventoryID) {
-        Map<Integer, Integer> map = new HashMap<>();
+    private Map<String, Integer> buildItemMap(InventoryID inventoryID) {
+        Map<String, Integer> map = new LinkedHashMap<>();
         ItemContainer container = client.getItemContainer(inventoryID);
         if (container == null) {
             return map;
@@ -132,7 +136,14 @@ public class PlayerContextAssembler {
             if (item == null || item.getId() == -1) {
                 continue;
             }
-            map.merge(item.getId(), item.getQuantity(), Integer::sum);
+            String name;
+            try {
+                name = itemManager.getItemComposition(item.getId()).getName();
+            } catch (Exception e) {
+                // Item not found in cache — fall back to ID
+                name = "Item#" + item.getId();
+            }
+            map.merge(name, item.getQuantity(), Integer::sum);
         }
         return map;
     }

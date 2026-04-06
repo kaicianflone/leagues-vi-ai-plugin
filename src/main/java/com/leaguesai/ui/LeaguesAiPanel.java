@@ -3,6 +3,7 @@ package com.leaguesai.ui;
 import net.runelite.client.ui.PluginPanel;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
 
 public class LeaguesAiPanel extends PluginPanel {
@@ -22,16 +23,28 @@ public class LeaguesAiPanel extends PluginPanel {
     private final AdvicePanel advicePanel;
     private final SettingsPanel settingsPanel;
 
-    private final JButton chatTabButton;
-    private final JButton adviceTabButton;
-    private final JButton settingsTabButton;
+    private JButton chatTabButton;
+    private JButton adviceTabButton;
+    private JButton settingsTabButton;
 
-    private final CardLayout cardLayout;
-    private final JPanel contentArea;
+    private CardLayout cardLayout;
+    private JPanel contentArea;
+
+    // Auth-gated card layout
+    private final CardLayout centerCardLayout;
+    private final JPanel centerContainer;
+    private final JPanel preAuthPanel;
+    private final JPanel mainContentPanel;
+    private JButton preAuthSignInButton;
+    private Runnable onPreAuthSignIn;
+    private boolean authenticated = false;
 
     private static final String TAB_CHAT = "Chat";
     private static final String TAB_ADVICE = "Advice";
     private static final String TAB_SETTINGS = "Settings";
+
+    private static final String CARD_PRE_AUTH = "preAuth";
+    private static final String CARD_MAIN = "main";
 
     public LeaguesAiPanel(int animationSpeed) {
         super(false);
@@ -66,22 +79,46 @@ public class LeaguesAiPanel extends PluginPanel {
 
         add(topPanel, BorderLayout.NORTH);
 
-        // Center: tab bar + card layout
+        // Tab panels — constructed first so main content can reference them
+        chatPanel = new ChatPanel();
+        advicePanel = new AdvicePanel();
+        settingsPanel = new SettingsPanel();
+
+        // Build both cards (pre-auth + main)
+        preAuthPanel = createPreAuthPanel();
+        mainContentPanel = createMainContentPanel();
+
+        centerCardLayout = new CardLayout();
+        centerContainer = new JPanel(centerCardLayout);
+        centerContainer.setBackground(BACKGROUND_COLOR);
+        centerContainer.add(preAuthPanel, CARD_PRE_AUTH);
+        centerContainer.add(mainContentPanel, CARD_MAIN);
+        add(centerContainer, BorderLayout.CENTER);
+
+        // Start on pre-auth
+        centerCardLayout.show(centerContainer, CARD_PRE_AUTH);
+
+        // Start on Chat tab within main
+        switchTab(TAB_CHAT);
+    }
+
+    private JPanel createMainContentPanel() {
         JPanel centerPanel = new JPanel(new BorderLayout(0, 0));
         centerPanel.setBackground(BACKGROUND_COLOR);
 
-        // Tab button bar
-        JPanel tabBar = new JPanel(new GridLayout(1, 3, 2, 0));
+        // Tab button bar — only Chat + Advice visible post-auth.
+        // Settings button is constructed for navigability but not added to the bar.
+        JPanel tabBar = new JPanel(new GridLayout(1, 2, 2, 0));
         tabBar.setBackground(BACKGROUND_COLOR);
         tabBar.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
 
         chatTabButton = createTabButton(TAB_CHAT);
         adviceTabButton = createTabButton(TAB_ADVICE);
         settingsTabButton = createTabButton(TAB_SETTINGS);
+        settingsTabButton.setVisible(false);
 
         tabBar.add(chatTabButton);
         tabBar.add(adviceTabButton);
-        tabBar.add(settingsTabButton);
 
         centerPanel.add(tabBar, BorderLayout.NORTH);
 
@@ -90,24 +127,56 @@ public class LeaguesAiPanel extends PluginPanel {
         contentArea = new JPanel(cardLayout);
         contentArea.setBackground(BACKGROUND_COLOR);
 
-        chatPanel = new ChatPanel();
-        advicePanel = new AdvicePanel();
-        settingsPanel = new SettingsPanel();
-
         contentArea.add(chatPanel, TAB_CHAT);
         contentArea.add(advicePanel, TAB_ADVICE);
         contentArea.add(settingsPanel, TAB_SETTINGS);
 
         centerPanel.add(contentArea, BorderLayout.CENTER);
-        add(centerPanel, BorderLayout.CENTER);
 
         // Wire tab switching
         chatTabButton.addActionListener(e -> switchTab(TAB_CHAT));
         adviceTabButton.addActionListener(e -> switchTab(TAB_ADVICE));
         settingsTabButton.addActionListener(e -> switchTab(TAB_SETTINGS));
 
-        // Start on Chat tab
-        switchTab(TAB_CHAT);
+        return centerPanel;
+    }
+
+    private JPanel createPreAuthPanel() {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBackground(BACKGROUND_COLOR);
+        p.setBorder(new EmptyBorder(40, 20, 40, 20));
+
+        JLabel title = new JLabel("Welcome to Leagues AI");
+        title.setForeground(Color.WHITE);
+        title.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel subtitle = new JLabel("<html><div style='text-align:center;width:180px'>"
+                + "Sign in with your ChatGPT account to get started.</div></html>");
+        subtitle.setForeground(new Color(180, 180, 180));
+        subtitle.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        subtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        preAuthSignInButton = new JButton("Sign in with ChatGPT");
+        preAuthSignInButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+        preAuthSignInButton.setMaximumSize(new Dimension(200, 32));
+        preAuthSignInButton.addActionListener(e -> {
+            if (onPreAuthSignIn != null) {
+                preAuthSignInButton.setEnabled(false);
+                preAuthSignInButton.setText("Opening Terminal...");
+                onPreAuthSignIn.run();
+            }
+        });
+
+        p.add(Box.createVerticalGlue());
+        p.add(title);
+        p.add(Box.createVerticalStrut(8));
+        p.add(subtitle);
+        p.add(Box.createVerticalStrut(20));
+        p.add(preAuthSignInButton);
+        p.add(Box.createVerticalGlue());
+        return p;
     }
 
     private JButton createTabButton(String text) {
@@ -122,10 +191,37 @@ public class LeaguesAiPanel extends PluginPanel {
     }
 
     private void switchTab(String tabName) {
+        if (cardLayout == null || contentArea == null) return;
         cardLayout.show(contentArea, tabName);
         chatTabButton.setBackground(TAB_CHAT.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
         adviceTabButton.setBackground(TAB_ADVICE.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
         settingsTabButton.setBackground(TAB_SETTINGS.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
+    }
+
+    public void setAuthenticated(boolean authed) {
+        this.authenticated = authed;
+        SwingUtilities.invokeLater(() -> {
+            centerCardLayout.show(centerContainer, authed ? CARD_MAIN : CARD_PRE_AUTH);
+            if (settingsTabButton != null) {
+                settingsTabButton.setVisible(false);
+            }
+        });
+    }
+
+    public boolean isAuthenticated() {
+        return authenticated;
+    }
+
+    public void setOnPreAuthSignIn(Runnable handler) {
+        this.onPreAuthSignIn = handler;
+    }
+
+    public void setPreAuthButtonText(String text) {
+        SwingUtilities.invokeLater(() -> preAuthSignInButton.setText(text));
+    }
+
+    public void setPreAuthButtonEnabled(boolean enabled) {
+        SwingUtilities.invokeLater(() -> preAuthSignInButton.setEnabled(enabled));
     }
 
     public AsciiSpriteRenderer getSpriteRenderer() {

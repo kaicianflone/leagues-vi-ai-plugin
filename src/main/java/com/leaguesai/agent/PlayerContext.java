@@ -14,8 +14,8 @@ import java.util.Set;
 public class PlayerContext {
     private final Map<Skill, Integer> levels;
     private final Map<Skill, Integer> xp;
-    private final Map<Integer, Integer> inventory;
-    private final Map<Integer, Integer> equipment;
+    private final Map<String, Integer> inventory;
+    private final Map<String, Integer> equipment;
     private final Set<String> completedTasks;
     private final Set<String> unlockedAreas;
     private final WorldPoint location;

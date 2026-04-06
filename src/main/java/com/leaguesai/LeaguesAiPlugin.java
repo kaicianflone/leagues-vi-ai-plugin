@@ -129,8 +129,11 @@ public class LeaguesAiPlugin extends Plugin {
         // Wire panel callbacks (services may still be null until load finishes — guarded inside)
         setupPanelCallbacks();
 
-        // Wire sign-in button
+        // Wire sign-in button (legacy settings panel button — still works as fallback)
         panel.getSettingsPanel().setOnSignIn(this::launchCodexLogin);
+
+        // Wire pre-auth sign-in button
+        panel.setOnPreAuthSignIn(this::launchCodexLogin);
     }
 
     private void loadDatabaseAsync() {
@@ -178,10 +181,17 @@ public class LeaguesAiPlugin extends Plugin {
             }
 
             final boolean codexModeFinal = codexMode;
-            SwingUtilities.invokeLater(() -> panel.getSettingsPanel().setAuthMode(
-                    codexModeFinal
-                            ? "Auth: ChatGPT OAuth (from ~/.codex/auth.json)"
-                            : "Auth: API Key"));
+            SwingUtilities.invokeLater(() -> {
+                panel.getSettingsPanel().setAuthMode(
+                        codexModeFinal
+                                ? "Auth: ChatGPT OAuth (from ~/.codex/auth.json)"
+                                : "Auth: API Key");
+                panel.setAuthenticated(codexModeFinal);
+                if (!codexModeFinal) {
+                    panel.setPreAuthButtonText("Sign in with ChatGPT");
+                    panel.setPreAuthButtonEnabled(true);
+                }
+            });
 
             log.info("Leagues AI: loaded {} tasks, {} areas", tasks.size(), areas.size());
 
@@ -253,12 +263,17 @@ public class LeaguesAiPlugin extends Plugin {
                         panel.getSettingsPanel().setAuthMode("Auth: ChatGPT OAuth (from ~/.codex/auth.json)");
                         panel.getSettingsPanel().setSignInButtonText("Re-authenticate with ChatGPT");
                         panel.getSettingsPanel().setSignInButtonEnabled(true);
+                        panel.setAuthenticated(true);
+                        panel.setPreAuthButtonText("Sign in with ChatGPT");
+                        panel.setPreAuthButtonEnabled(true);
                         panel.getChatPanel().appendMessage("System", "Signed in successfully.");
                     });
                 } else {
                     SwingUtilities.invokeLater(() -> {
                         panel.getSettingsPanel().setSignInButtonText("Sign in with ChatGPT");
                         panel.getSettingsPanel().setSignInButtonEnabled(true);
+                        panel.setPreAuthButtonText("Sign in with ChatGPT");
+                        panel.setPreAuthButtonEnabled(true);
                         panel.getChatPanel().showError("Login timed out after 2 minutes. Check if Terminal opened and whether you completed the browser flow.");
                     });
                 }
@@ -267,6 +282,8 @@ public class LeaguesAiPlugin extends Plugin {
                 SwingUtilities.invokeLater(() -> {
                     panel.getSettingsPanel().setSignInButtonText("Sign in with ChatGPT");
                     panel.getSettingsPanel().setSignInButtonEnabled(true);
+                    panel.setPreAuthButtonText("Sign in with ChatGPT");
+                    panel.setPreAuthButtonEnabled(true);
                     panel.getChatPanel().showError("Failed to launch Codex login: " + e.getMessage());
                 });
             }

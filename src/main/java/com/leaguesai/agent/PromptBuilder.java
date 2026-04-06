@@ -49,6 +49,16 @@ public class PromptBuilder {
         }
         sb.append("\n");
 
+        // Inventory
+        sb.append("## Inventory\n");
+        appendItemSection(sb, ctx.getInventory(), 28);
+        sb.append("\n");
+
+        // Equipment
+        sb.append("## Equipment\n");
+        appendItemSection(sb, ctx.getEquipment(), Integer.MAX_VALUE);
+        sb.append("\n");
+
         // Unlocked Areas
         sb.append("## Unlocked Areas\n");
         if (ctx.getUnlockedAreas() != null && !ctx.getUnlockedAreas().isEmpty()) {
@@ -100,6 +110,24 @@ public class PromptBuilder {
         }
 
         return sb.toString();
+    }
+
+    private static void appendItemSection(StringBuilder sb, Map<String, Integer> items, int cap) {
+        if (items == null || items.isEmpty()) {
+            sb.append("- (empty)\n");
+            return;
+        }
+        int count = 0;
+        for (Map.Entry<String, Integer> entry : items.entrySet()) {
+            if (count >= cap) break;
+            sb.append("- ").append(entry.getKey());
+            Integer qty = entry.getValue();
+            if (qty != null && qty > 1) {
+                sb.append(" x").append(qty);
+            }
+            sb.append("\n");
+            count++;
+        }
     }
 
     /**

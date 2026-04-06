@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class CodexOauthClient implements LlmClient {
 
-    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private static final MediaType JSON = MediaType.get("application/json");
     private static final String DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex/";
     private static final String USER_AGENT = "codex_cli_rs/0.117.0 (Darwin 25.4.0; arm64) leagues-ai";
 
@@ -66,6 +66,7 @@ public class CodexOauthClient implements LlmClient {
     @Override
     public String chatCompletion(String systemPrompt, List<OpenAiClient.Message> messages) throws IOException {
         String requestJson = buildRequestBody(systemPrompt, messages);
+        log.info("CODEX DEBUG request body: {}", requestJson);
 
         Response response = executeWithAuth(requestJson, false);
         if (response.code() == 401) {
@@ -104,11 +105,16 @@ public class CodexOauthClient implements LlmClient {
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
-                .post(RequestBody.create(requestJson, JSON));
+                .post(RequestBody.create(requestJson.getBytes(StandardCharsets.UTF_8), JSON));
         if (accountId != null && !accountId.isEmpty()) {
             b.header("ChatGPT-Account-ID", accountId);
         }
-        return httpClient.newCall(b.build()).execute();
+        Request req = b.build();
+        log.info("CODEX DEBUG request URL: {} headers: {}", req.url(), req.headers());
+        if (req.body() != null && req.body().contentType() != null) {
+            log.info("CODEX DEBUG request body content-type: {}", req.body().contentType());
+        }
+        return httpClient.newCall(req).execute();
     }
 
     private String buildRequestBody(String systemPrompt, List<OpenAiClient.Message> messages) {

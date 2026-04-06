@@ -20,11 +20,18 @@ public class PromptBuilderTest {
         Set<String> unlockedAreas = new HashSet<>(Arrays.asList("misthalin", "asgarnia"));
         Set<String> completedTasks = new HashSet<>(Arrays.asList("task_001", "task_002"));
 
+        Map<String, Integer> inventory = new LinkedHashMap<>();
+        inventory.put("Lobster", 5);
+        inventory.put("Tuna", 3);
+
+        Map<String, Integer> equipment = new LinkedHashMap<>();
+        equipment.put("Whip", 1);
+
         PlayerContext ctx = PlayerContext.builder()
                 .levels(levels)
                 .xp(new EnumMap<>(Skill.class))
-                .inventory(new HashMap<>())
-                .equipment(new HashMap<>())
+                .inventory(inventory)
+                .equipment(equipment)
                 .completedTasks(completedTasks)
                 .unlockedAreas(unlockedAreas)
                 .location(null)
@@ -42,6 +49,35 @@ public class PromptBuilderTest {
         assertTrue("Should contain misthalin area", prompt.toLowerCase().contains("misthalin"));
         assertTrue("Should contain league points", prompt.contains("150"));
         assertTrue("Should contain current goal", prompt.contains("Complete all easy tasks in Misthalin"));
+        assertTrue("Should contain Inventory section header", prompt.contains("## Inventory"));
+        assertTrue("Should contain Lobster with quantity", prompt.contains("Lobster x5"));
+        assertTrue("Should contain Tuna with quantity", prompt.contains("Tuna x3"));
+        assertTrue("Should contain Equipment section header", prompt.contains("## Equipment"));
+        assertTrue("Should contain Whip in equipment", prompt.contains("- Whip"));
+    }
+
+    @Test
+    public void testBuildSystemPrompt_emptyInventory_rendersEmptyMarker() {
+        PlayerContext ctx = PlayerContext.builder()
+                .levels(new EnumMap<>(Skill.class))
+                .xp(new EnumMap<>(Skill.class))
+                .inventory(new LinkedHashMap<>())
+                .equipment(new LinkedHashMap<>())
+                .completedTasks(new HashSet<>())
+                .unlockedAreas(new HashSet<>())
+                .location(null)
+                .leaguePoints(0)
+                .combatLevel(3)
+                .currentGoal("")
+                .currentPlan(new ArrayList<>())
+                .build();
+
+        String prompt = PromptBuilder.buildSystemPrompt(ctx);
+        assertTrue("Should contain Inventory header", prompt.contains("## Inventory"));
+        assertTrue("Should render (empty) for empty inventory",
+                prompt.contains("## Inventory\n- (empty)"));
+        assertTrue("Should render (empty) for empty equipment",
+                prompt.contains("## Equipment\n- (empty)"));
     }
 
     @Test
