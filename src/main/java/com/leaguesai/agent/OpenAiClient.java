@@ -49,6 +49,32 @@ public class OpenAiClient {
         this.retryDelayMs = retryDelayMs;
     }
 
+    /**
+     * Shuts down the underlying OkHttp dispatcher and connection pool. Must be
+     * called when an OpenAiClient is replaced or the plugin is shutting down,
+     * otherwise the dispatcher's executor service and idle connections will
+     * leak.
+     */
+    public void close() {
+        try {
+            httpClient.dispatcher().executorService().shutdown();
+        } catch (Exception ignored) {
+            // best-effort cleanup
+        }
+        try {
+            httpClient.connectionPool().evictAll();
+        } catch (Exception ignored) {
+            // best-effort cleanup
+        }
+        try {
+            if (httpClient.cache() != null) {
+                httpClient.cache().close();
+            }
+        } catch (IOException ignored) {
+            // best-effort cleanup
+        }
+    }
+
     @Data
     @AllArgsConstructor
     public static class Message {

@@ -73,6 +73,10 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile ChatService chatService;
     private volatile AdviceService adviceService;
 
+    // Tracks the API key the current OpenAiClient was built with so we only
+    // rebuild (and tear down OkHttp resources) on actual change.
+    private volatile String currentApiKey = "";
+
     @Override
     protected void startUp() throws Exception {
         log.info("Leagues AI starting...");
@@ -97,6 +101,10 @@ public class LeaguesAiPlugin extends Plugin {
         eventBus.register(xpMonitor);
         eventBus.register(inventoryMonitor);
         eventBus.register(locationMonitor);
+
+        // Overlays that maintain caches via spawn/despawn events must be on the bus
+        eventBus.register(objectOverlay);
+        eventBus.register(groundItemOverlay);
 
         // Register overlays
         overlayManager.add(tileOverlay);
@@ -128,9 +136,14 @@ public class LeaguesAiPlugin extends Plugin {
             vectorIndex = new VectorIndex(embeddings);
 
             String apiKey = config.openaiApiKey();
+            OpenAiClient previous = openAiClient;
             openAiClient = new OpenAiClient(apiKey, config.openaiModel());
+            currentApiKey = apiKey != null ? apiKey : "";
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
             adviceService = new AdviceService(openAiClient, contextAssembler);
+            if (previous != null) {
+                previous.close();
+            }
 
             log.info("Leagues AI: loaded {} tasks, {} areas", tasks.size(), areas.size());
 
@@ -211,9 +224,17 @@ public class LeaguesAiPlugin extends Plugin {
         });
 
         // Settings — API key changed: rebuild the client and dependent services
+        // ONLY if the key actually differs from what we already have, otherwise
+        // every focus/blur leaks a fresh OkHttp dispatcher + connection pool.
         panel.getSettingsPanel().setOnApiKeyChanged(newKey -> {
+            String safeKey = newKey != null ? newKey : "";
+            if (safeKey.equals(currentApiKey)) {
+                return; // no-op, key unchanged
+            }
+            currentApiKey = safeKey;
             llmExecutor.submit(() -> {
-                openAiClient = new OpenAiClient(newKey, config.openaiModel());
+                OpenAiClient old = openAiClient;
+                openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
                     adviceService = new AdviceService(openAiClient, contextAssembler);
@@ -221,6 +242,9 @@ public class LeaguesAiPlugin extends Plugin {
                     SwingUtilities.invokeLater(() ->
                         panel.getSettingsPanel().setDatabaseStatus(
                             "API key updated. Services restarted.", false));
+                }
+                if (old != null) {
+                    old.close();
                 }
             });
         });
@@ -245,6 +269,8 @@ public class LeaguesAiPlugin extends Plugin {
         eventBus.unregister(xpMonitor);
         eventBus.unregister(inventoryMonitor);
         eventBus.unregister(locationMonitor);
+        eventBus.unregister(objectOverlay);
+        eventBus.unregister(groundItemOverlay);
 
         overlayManager.remove(tileOverlay);
         overlayManager.remove(arrowOverlay);
@@ -270,6 +296,13 @@ public class LeaguesAiPlugin extends Plugin {
                 llmExecutor.shutdownNow();
             }
             llmExecutor = null;
+        }
+
+        // Tear down the OkHttp client AFTER the executor is gone so no in-flight
+        // requests are using it.
+        if (openAiClient != null) {
+            openAiClient.close();
+            openAiClient = null;
         }
 
         log.info("Leagues AI stopped");

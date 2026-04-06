@@ -14,6 +14,16 @@ public class VectorIndex {
         this.vectors = vectors;
     }
 
+    /** Returns true if no embeddings have been loaded. */
+    public boolean isEmpty() {
+        return vectors == null || vectors.isEmpty();
+    }
+
+    /** Number of indexed vectors. */
+    public int size() {
+        return vectors == null ? 0 : vectors.size();
+    }
+
     /**
      * Returns up to {@code limit} task IDs ordered by cosine similarity to the query vector,
      * highest similarity first.

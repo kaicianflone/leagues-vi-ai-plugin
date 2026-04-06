@@ -5,6 +5,8 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
+import net.runelite.api.events.GameObjectDespawned;
+import net.runelite.api.events.GameObjectSpawned;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -14,6 +16,9 @@ import java.awt.Polygon;
 import java.awt.Shape;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,6 +35,8 @@ public class ObjectHighlightOverlayTest {
         client = mock(Client.class);
         config = mock(LeaguesAiConfig.class);
         when(config.overlayColor()).thenReturn(Color.MAGENTA);
+        // Default: scene is null so setTargetObjectIds doesn't try to walk
+        when(client.getScene()).thenReturn(null);
         overlay = new ObjectHighlightOverlay(client, config);
     }
 
@@ -43,24 +50,22 @@ public class ObjectHighlightOverlayTest {
     @Test
     public void setAndClear_objectIds() {
         overlay.setTargetObjectIds(Arrays.asList(100, 200));
-        assertEquals(Arrays.asList(100, 200), overlay.getTargetObjectIds());
+        assertEquals(new HashSet<>(Arrays.asList(100, 200)), overlay.getTargetObjectIds());
         overlay.clear();
-        assertNull(overlay.getTargetObjectIds());
+        assertTrue(overlay.getTargetObjectIds().isEmpty());
     }
 
     @Test
-    public void render_whenSceneNull_doesNotDraw() {
-        overlay.setTargetObjectIds(Arrays.asList(100));
-        when(client.getScene()).thenReturn(null);
+    public void render_whenCacheEmpty_doesNotDraw() {
+        overlay.setTargetObjectIds(Collections.singletonList(100));
+        // Scene is null in setUp() so cache rebuild yields nothing
         Graphics2D g = mock(Graphics2D.class);
         assertNull(overlay.render(g));
         verifyNoInteractions(g);
     }
 
     @Test
-    public void render_whenMatchingObjectInScene_drawsHull() {
-        overlay.setTargetObjectIds(Arrays.asList(555));
-
+    public void setTargetObjectIds_withMatchingSceneObject_populatesCacheAndRenders() {
         Scene scene = mock(Scene.class);
         Tile[][][] tiles = new Tile[1][104][104];
         Tile tile = mock(Tile.class);
@@ -74,7 +79,11 @@ public class ObjectHighlightOverlayTest {
 
         when(client.getScene()).thenReturn(scene);
         when(scene.getTiles()).thenReturn(tiles);
-        when(client.getPlane()).thenReturn(0);
+
+        overlay.setTargetObjectIds(Collections.singletonList(555));
+
+        List<GameObject> cache = overlay.getMatchingObjectsForTest();
+        assertEquals(1, cache.size());
 
         BufferedImage img = new BufferedImage(800, 600, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = spy(img.createGraphics());
@@ -83,5 +92,48 @@ public class ObjectHighlightOverlayTest {
         verify(g, atLeastOnce()).fill(any(Shape.class));
         verify(g, atLeastOnce()).draw(any(Shape.class));
         g.dispose();
+    }
+
+    @Test
+    public void onGameObjectSpawned_addsMatchingObjectToCache() {
+        overlay.setTargetObjectIds(Collections.singletonList(777));
+        assertTrue(overlay.getMatchingObjectsForTest().isEmpty());
+
+        GameObject obj = mock(GameObject.class);
+        when(obj.getId()).thenReturn(777);
+        GameObjectSpawned event = mock(GameObjectSpawned.class);
+        when(event.getGameObject()).thenReturn(obj);
+
+        overlay.onGameObjectSpawned(event);
+        assertEquals(1, overlay.getMatchingObjectsForTest().size());
+    }
+
+    @Test
+    public void onGameObjectSpawned_ignoresNonMatching() {
+        overlay.setTargetObjectIds(Collections.singletonList(777));
+        GameObject obj = mock(GameObject.class);
+        when(obj.getId()).thenReturn(123);
+        GameObjectSpawned event = mock(GameObjectSpawned.class);
+        when(event.getGameObject()).thenReturn(obj);
+
+        overlay.onGameObjectSpawned(event);
+        assertTrue(overlay.getMatchingObjectsForTest().isEmpty());
+    }
+
+    @Test
+    public void onGameObjectDespawned_removesFromCache() {
+        overlay.setTargetObjectIds(Collections.singletonList(777));
+        GameObject obj = mock(GameObject.class);
+        when(obj.getId()).thenReturn(777);
+
+        GameObjectSpawned spawn = mock(GameObjectSpawned.class);
+        when(spawn.getGameObject()).thenReturn(obj);
+        overlay.onGameObjectSpawned(spawn);
+        assertEquals(1, overlay.getMatchingObjectsForTest().size());
+
+        GameObjectDespawned despawn = mock(GameObjectDespawned.class);
+        when(despawn.getGameObject()).thenReturn(obj);
+        overlay.onGameObjectDespawned(despawn);
+        assertTrue(overlay.getMatchingObjectsForTest().isEmpty());
     }
 }

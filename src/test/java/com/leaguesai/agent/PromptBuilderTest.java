@@ -45,6 +45,62 @@ public class PromptBuilderTest {
     }
 
     @Test
+    public void testBuildSystemPrompt_withRelevantTasks_includesSection() {
+        PlayerContext ctx = PlayerContext.builder()
+                .levels(new EnumMap<>(Skill.class))
+                .xp(new EnumMap<>(Skill.class))
+                .inventory(new HashMap<>())
+                .equipment(new HashMap<>())
+                .completedTasks(new HashSet<>())
+                .unlockedAreas(new HashSet<>())
+                .location(null)
+                .leaguePoints(0)
+                .combatLevel(3)
+                .currentGoal("")
+                .currentPlan(new ArrayList<>())
+                .build();
+
+        Task task = Task.builder()
+                .id("task_shrimp")
+                .name("Catch Shrimp")
+                .description("Catch a raw shrimp from the Lumbridge fishing spot.")
+                .difficulty(Difficulty.EASY)
+                .points(10)
+                .area("misthalin")
+                .build();
+
+        String prompt = PromptBuilder.buildSystemPrompt(ctx, Collections.singletonList(task));
+
+        assertNotNull(prompt);
+        assertTrue("Should contain Relevant Tasks section header",
+                prompt.contains("## Relevant Tasks"));
+        assertTrue("Should contain task name", prompt.contains("Catch Shrimp"));
+        assertTrue("Should contain task id", prompt.contains("task_shrimp"));
+        assertTrue("Should contain description", prompt.contains("Lumbridge fishing"));
+    }
+
+    @Test
+    public void testBuildSystemPrompt_emptyRelevantTasks_omitsSection() {
+        PlayerContext ctx = PlayerContext.builder()
+                .levels(new EnumMap<>(Skill.class))
+                .xp(new EnumMap<>(Skill.class))
+                .inventory(new HashMap<>())
+                .equipment(new HashMap<>())
+                .completedTasks(new HashSet<>())
+                .unlockedAreas(new HashSet<>())
+                .location(null)
+                .leaguePoints(0)
+                .combatLevel(3)
+                .currentGoal("")
+                .currentPlan(new ArrayList<>())
+                .build();
+
+        String prompt = PromptBuilder.buildSystemPrompt(ctx, Collections.emptyList());
+        assertFalse("Should NOT contain Relevant Tasks header when empty",
+                prompt.contains("## Relevant Tasks"));
+    }
+
+    @Test
     public void testBuildPlanningPrompt() {
         Task task = Task.builder()
                 .id("task_shrimp")

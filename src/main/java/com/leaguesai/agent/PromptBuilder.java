@@ -3,6 +3,7 @@ package com.leaguesai.agent;
 import com.leaguesai.data.model.Task;
 import net.runelite.api.Skill;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -13,8 +14,19 @@ public class PromptBuilder {
 
     /**
      * Builds a Markdown system prompt summarising the player's current state.
+     * Backward-compatible single-arg form — delegates to the overload below
+     * with no relevant tasks.
      */
     public static String buildSystemPrompt(PlayerContext ctx) {
+        return buildSystemPrompt(ctx, Collections.emptyList());
+    }
+
+    /**
+     * Builds a Markdown system prompt summarising the player's current state,
+     * optionally including a list of relevant tasks retrieved from semantic
+     * search (RAG context).
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
 
@@ -68,6 +80,23 @@ public class PromptBuilder {
             }
         } else {
             sb.append("- No steps planned yet.\n");
+        }
+
+        // Relevant Tasks (from RAG retrieval) — only included when non-empty
+        if (relevantTasks != null && !relevantTasks.isEmpty()) {
+            sb.append("\n## Relevant Tasks\n");
+            for (Task task : relevantTasks) {
+                if (task == null) continue;
+                sb.append("- ").append(task.getName())
+                        .append(" [").append(task.getDifficulty())
+                        .append(", ").append(task.getPoints()).append("pts")
+                        .append(", ").append(task.getArea()).append("]")
+                        .append(" (id: ").append(task.getId()).append(")");
+                if (task.getDescription() != null && !task.getDescription().isEmpty()) {
+                    sb.append(" — ").append(task.getDescription());
+                }
+                sb.append("\n");
+            }
         }
 
         return sb.toString();

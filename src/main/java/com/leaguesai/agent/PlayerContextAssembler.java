@@ -7,6 +7,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
+import net.runelite.client.callback.ClientThread;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -17,12 +18,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Singleton
 public class PlayerContextAssembler {
 
     private final Client client;
     private final LocationMonitor locationMonitor;
+    private final ClientThread clientThread;
 
     // Mutable internal state — writes are synchronized, volatile reads for simple scalars
     private final Set<String> completedTasks = new HashSet<>();
@@ -31,12 +35,41 @@ public class PlayerContextAssembler {
     private volatile List<PlannedStep> currentPlan = new ArrayList<>();
 
     @Inject
-    public PlayerContextAssembler(Client client, LocationMonitor locationMonitor) {
+    public PlayerContextAssembler(Client client, LocationMonitor locationMonitor, ClientThread clientThread) {
         this.client = client;
         this.locationMonitor = locationMonitor;
+        this.clientThread = clientThread;
     }
 
+    /**
+     * Assemble the PlayerContext. RuneLite Client API calls must run on the
+     * game thread, so this submits the work via {@link ClientThread#invoke(Runnable)}
+     * and waits up to 5 seconds for the result. {@code clientThread.invoke()} runs
+     * the runnable immediately if already on the client thread, otherwise it queues
+     * to the next game tick.
+     */
     public PlayerContext assemble() {
+        CompletableFuture<PlayerContext> future = new CompletableFuture<>();
+        clientThread.invoke(() -> {
+            try {
+                future.complete(assembleOnClientThread());
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        });
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to assemble player context on client thread", e);
+        }
+    }
+
+    /**
+     * Performs the actual context assembly. MUST be called from the client/game
+     * thread. Package-private so tests can call it directly without needing to
+     * mock ClientThread invocation semantics.
+     */
+    PlayerContext assembleOnClientThread() {
         Player localPlayer = client.getLocalPlayer();
         int combatLevel = localPlayer != null ? localPlayer.getCombatLevel() : 0;
 
