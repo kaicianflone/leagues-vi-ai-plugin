@@ -20,11 +20,11 @@ public class LeaguesAiPanel extends PluginPanel {
     private final JLabel progressLabel;
 
     private final ChatPanel chatPanel;
-    private final AdvicePanel advicePanel;
+    private final GoalsPanel goalsPanel;
     private final SettingsPanel settingsPanel;
 
     private JButton chatTabButton;
-    private JButton adviceTabButton;
+    private JButton goalsTabButton;
     private JButton settingsTabButton;
 
     private CardLayout cardLayout;
@@ -40,7 +40,7 @@ public class LeaguesAiPanel extends PluginPanel {
     private boolean authenticated = false;
 
     private static final String TAB_CHAT = "Chat";
-    private static final String TAB_ADVICE = "Advice";
+    private static final String TAB_GOALS = "Goals";
     private static final String TAB_SETTINGS = "Settings";
 
     private static final String CARD_PRE_AUTH = "preAuth";
@@ -81,7 +81,7 @@ public class LeaguesAiPanel extends PluginPanel {
 
         // Tab panels — constructed first so main content can reference them
         chatPanel = new ChatPanel();
-        advicePanel = new AdvicePanel();
+        goalsPanel = new GoalsPanel();
         settingsPanel = new SettingsPanel();
 
         // Build both cards (pre-auth + main)
@@ -106,19 +106,19 @@ public class LeaguesAiPanel extends PluginPanel {
         JPanel centerPanel = new JPanel(new BorderLayout(0, 0));
         centerPanel.setBackground(BACKGROUND_COLOR);
 
-        // Tab button bar — only Chat + Advice visible post-auth.
+        // Tab button bar — only Chat + Goals visible post-auth.
         // Settings button is constructed for navigability but not added to the bar.
         JPanel tabBar = new JPanel(new GridLayout(1, 2, 2, 0));
         tabBar.setBackground(BACKGROUND_COLOR);
         tabBar.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
 
         chatTabButton = createTabButton(TAB_CHAT);
-        adviceTabButton = createTabButton(TAB_ADVICE);
+        goalsTabButton = createTabButton(TAB_GOALS);
         settingsTabButton = createTabButton(TAB_SETTINGS);
         settingsTabButton.setVisible(false);
 
         tabBar.add(chatTabButton);
-        tabBar.add(adviceTabButton);
+        tabBar.add(goalsTabButton);
 
         centerPanel.add(tabBar, BorderLayout.NORTH);
 
@@ -128,14 +128,14 @@ public class LeaguesAiPanel extends PluginPanel {
         contentArea.setBackground(BACKGROUND_COLOR);
 
         contentArea.add(chatPanel, TAB_CHAT);
-        contentArea.add(advicePanel, TAB_ADVICE);
+        contentArea.add(goalsPanel, TAB_GOALS);
         contentArea.add(settingsPanel, TAB_SETTINGS);
 
         centerPanel.add(contentArea, BorderLayout.CENTER);
 
         // Wire tab switching
         chatTabButton.addActionListener(e -> switchTab(TAB_CHAT));
-        adviceTabButton.addActionListener(e -> switchTab(TAB_ADVICE));
+        goalsTabButton.addActionListener(e -> switchTab(TAB_GOALS));
         settingsTabButton.addActionListener(e -> switchTab(TAB_SETTINGS));
 
         return centerPanel;
@@ -194,8 +194,18 @@ public class LeaguesAiPanel extends PluginPanel {
         if (cardLayout == null || contentArea == null) return;
         cardLayout.show(contentArea, tabName);
         chatTabButton.setBackground(TAB_CHAT.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
-        adviceTabButton.setBackground(TAB_ADVICE.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
+        goalsTabButton.setBackground(TAB_GOALS.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
         settingsTabButton.setBackground(TAB_SETTINGS.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
+    }
+
+    /** Public hook for the chat→goals link button. EDT-safe. */
+    public void switchToGoalsTab() {
+        SwingUtilities.invokeLater(() -> switchTab(TAB_GOALS));
+    }
+
+    /** Public hook for the goals→chat link button. EDT-safe. */
+    public void switchToChatTab() {
+        SwingUtilities.invokeLater(() -> switchTab(TAB_CHAT));
     }
 
     public void setAuthenticated(boolean authed) {
@@ -232,8 +242,8 @@ public class LeaguesAiPanel extends PluginPanel {
         return chatPanel;
     }
 
-    public AdvicePanel getAdvicePanel() {
-        return advicePanel;
+    public GoalsPanel getGoalsPanel() {
+        return goalsPanel;
     }
 
     public SettingsPanel getSettingsPanel() {

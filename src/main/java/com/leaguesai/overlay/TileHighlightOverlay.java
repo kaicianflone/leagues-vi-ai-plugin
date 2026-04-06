@@ -12,10 +12,12 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
 
+@Singleton
 public class TileHighlightOverlay extends Overlay {
 
     private final Client client;

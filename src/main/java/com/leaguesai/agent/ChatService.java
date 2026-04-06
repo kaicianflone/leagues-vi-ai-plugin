@@ -4,13 +4,17 @@ import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.VectorIndex;
 import com.leaguesai.data.model.Task;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.coords.WorldPoint;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -23,6 +27,25 @@ public class ChatService {
     private final PlayerContextAssembler contextAssembler;
     private final TaskRepository taskRepo;
     private final VectorIndex vectorIndex;
+    private final GoalPlanner goalPlanner;
+    private final ItemSourceResolver itemSourceResolver;
+    private final PersonaReviewer personaReviewer;
+
+    // Optional callback fired after a planner run succeeds. The plugin sets
+    // this to push the plan to the UI (goals panel + overlays). The third
+    // arg is the persona review verdict text, which may be null on failure.
+    private volatile PlanCallback onPlanCreated;
+
+    /** Functional callback so we can pass three args without nesting BiConsumers. */
+    @FunctionalInterface
+    public interface PlanCallback {
+        void onPlan(String goal, List<PlannedStep> steps, String review);
+    }
+
+    // Generation token: every plan-trigger increments this. Callback only
+    // fires for the latest generation, so a stale resolver/reviewer that
+    // finishes after the user has triggered a newer plan is dropped.
+    private final AtomicLong planGeneration = new AtomicLong(0);
 
     // Thread-safe: all access guarded by synchronized blocks
     private final List<OpenAiClient.Message> conversationHistory =
@@ -32,11 +55,15 @@ public class ChatService {
     public ChatService(LlmClient openAiClient,
                        PlayerContextAssembler contextAssembler,
                        TaskRepository taskRepo,
-                       VectorIndex vectorIndex) {
+                       VectorIndex vectorIndex,
+                       GoalPlanner goalPlanner) {
         this.openAiClient = openAiClient;
         this.contextAssembler = contextAssembler;
         this.taskRepo = taskRepo;
         this.vectorIndex = vectorIndex;
+        this.goalPlanner = goalPlanner;
+        this.itemSourceResolver = openAiClient != null ? new ItemSourceResolver(openAiClient) : null;
+        this.personaReviewer = openAiClient != null ? new PersonaReviewer(openAiClient) : null;
     }
 
     /**
@@ -47,6 +74,10 @@ public class ChatService {
      * held during a potentially long I/O operation.
      */
     public String sendMessage(String userMessage) throws Exception {
+        // Intent detection: if the message looks like a goal, run the planner first
+        // so the LLM sees an actual ordered plan in the system prompt context.
+        maybeTriggerPlanner(userMessage);
+
         // RAG: find relevant tasks via semantic search. Done OUTSIDE the lock
         // because both the embedding network call and the vector search may take
         // a non-trivial amount of time. Failures degrade gracefully — chat still
@@ -103,11 +134,203 @@ public class ChatService {
     }
 
     /**
+     * Set a callback fired after a plan is built AND its item sources +
+     * persona review have been resolved (or attempted). The callback
+     * receives the goal text, the enriched plan, and the review verdict
+     * (which may be null if the reviewer call failed).
+     */
+    public void setOnPlanCreated(PlanCallback callback) {
+        this.onPlanCreated = callback;
+    }
+
+    /**
      * Clear the conversation history.
      */
     public void clearHistory() {
         synchronized (conversationHistory) {
             conversationHistory.clear();
+        }
+    }
+
+    /**
+     * Heuristic: if the user message looks like a goal-setting request, run the
+     * planner now and store the resulting plan in the context assembler. This
+     * way the system prompt for the upcoming LLM call includes the actual
+     * ordered task list, so the LLM can talk about real tasks instead of
+     * hallucinating.
+     *
+     * <p>Triggers on patterns like:
+     * <ul>
+     *   <li>"complete all karamja easy tasks"</li>
+     *   <li>"i want to finish misthalin medium"</li>
+     *   <li>"plan kandarin hard tasks"</li>
+     *   <li>"/plan karamja easy"</li>
+     * </ul>
+     *
+     * <p>If no intent is detected, this is a no-op and chat proceeds normally.
+     */
+    private void maybeTriggerPlanner(String userMessage) {
+        if (userMessage == null || userMessage.isEmpty()) return;
+        if (taskRepo == null || goalPlanner == null) return;
+
+        String lower = userMessage.toLowerCase().trim();
+
+        // Trigger phrases — covers explicit slash commands, "plan ..." prefix,
+        // and natural-language commit phrasings a player might use after the AI
+        // has proposed a plan in conversation. The planner is fuzzy enough that
+        // false positives bail silently (resolveGoalTasks returns empty).
+        boolean triggered = false;
+
+        // Explicit prefixes
+        if (lower.startsWith("/plan")) triggered = true;
+        else if (lower.startsWith("plan ")) triggered = true;
+        else if (lower.startsWith("set goal")) triggered = true;
+        else if (lower.startsWith("set my goal")) triggered = true;
+        else if (lower.startsWith("start plan")) triggered = true;
+        else if (lower.startsWith("make plan")) triggered = true;
+        else if (lower.startsWith("build plan")) triggered = true;
+        else if (lower.startsWith("load plan")) triggered = true;
+        else if (lower.startsWith("lock in")) triggered = true;
+        else if (lower.startsWith("lock it in")) triggered = true;
+
+        // Natural-language phrases anywhere in the message
+        if (!triggered) {
+            String[] phrases = {
+                "make me a plan", "build me a plan", "build a plan", "make a plan",
+                "give me a plan", "plan out", "plan it out", "start planning",
+                "let's plan", "lets plan", "create a plan", "draw up a plan",
+                "i want to complete all", "i wanna complete all",
+                "i want to do all", "i wanna do all",
+                "i want to finish all", "i wanna finish all",
+                "complete all the", "finish all the", "do all the",
+                "complete every", "finish every", "do every",
+                "knock out all", "knock out the",
+                "yes plan", "yes please plan", "ok plan", "ok let's plan",
+                "go ahead and plan", "load the plan", "load that plan"
+            };
+            for (String phrase : phrases) {
+                if (lower.contains(phrase)) {
+                    triggered = true;
+                    break;
+                }
+            }
+        }
+
+        if (!triggered) {
+            return;
+        }
+        log.info("Planner triggered by message: '{}'", userMessage);
+
+        // Bump generation: any in-flight resolver/reviewer for an older plan
+        // will be ignored when it tries to fire the callback.
+        final long myGen = planGeneration.incrementAndGet();
+
+        try {
+            List<Task> targets = goalPlanner.resolveGoalTasks(userMessage);
+            if (targets.isEmpty()) {
+                log.info("Planner: no tasks matched goal '{}'", userMessage);
+                return;
+            }
+
+            Set<String> completed = new HashSet<>(); // TODO: pull from contextAssembler when wired
+            List<Task> dag = goalPlanner.buildDag(targets, completed);
+            List<Task> sorted;
+            try {
+                sorted = goalPlanner.topologicalSort(dag);
+            } catch (IllegalStateException cycle) {
+                log.warn("Planner: cycle detected, falling back to insertion order: {}", cycle.getMessage());
+                sorted = dag;
+            }
+
+            WorldPoint loc = contextAssembler.assemble().getLocation();
+            List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
+
+            // Convert tasks → PlannedSteps with OverlayData populated from whatever
+            // the scraper captured. Many tasks won't have a resolved location yet,
+            // so the overlay will only show for tasks with a known WorldPoint.
+            List<PlannedStep> steps = optimized.stream()
+                    .map(t -> {
+                        List<Integer> npcIds = new ArrayList<>();
+                        if (t.getTargetNpcs() != null) {
+                            t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
+                        }
+                        List<Integer> objIds = new ArrayList<>();
+                        if (t.getTargetObjects() != null) {
+                            t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
+                        }
+                        List<Integer> itemIds = new ArrayList<>();
+                        if (t.getTargetItems() != null) {
+                            t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
+                        }
+                        com.leaguesai.overlay.OverlayData overlayData =
+                                com.leaguesai.overlay.OverlayData.builder()
+                                        .targetTile(t.getLocation())
+                                        .targetNpcIds(npcIds)
+                                        .targetObjectIds(objIds)
+                                        .targetItemIds(itemIds)
+                                        .pathPoints(Collections.emptyList())
+                                        .widgetIds(Collections.emptyList())
+                                        .showArrow(t.getLocation() != null)
+                                        .showMinimap(t.getLocation() != null)
+                                        .showWorldMap(t.getLocation() != null)
+                                        .build();
+                        return PlannedStep.builder()
+                                .task(t)
+                                .destination(t.getLocation())
+                                .instruction(t.getName())
+                                .overlayData(overlayData)
+                                .build();
+                    })
+                    .collect(Collectors.toList());
+
+            contextAssembler.setCurrentGoal(userMessage);
+            contextAssembler.setCurrentPlan(steps);
+            log.info("Planner: built {} planned steps for goal '{}'", steps.size(), userMessage);
+
+            // Enrich the plan with item sources (one LLM call). Failures
+            // degrade gracefully — the plan still loads.
+            List<PlannedStep> enriched = steps;
+            if (itemSourceResolver != null) {
+                try {
+                    enriched = itemSourceResolver.resolveBatch(steps);
+                } catch (Exception resolverErr) {
+                    log.warn("Item source resolution failed: {}", resolverErr.getMessage());
+                }
+            }
+
+            // Adversarial persona review (one LLM call). May return null on failure.
+            String review = null;
+            if (personaReviewer != null) {
+                try {
+                    review = personaReviewer.review(userMessage, enriched);
+                } catch (Exception revErr) {
+                    log.warn("Persona review failed: {}", revErr.getMessage());
+                }
+            }
+
+            // Stale-plan guard: if the user fired another plan while we were
+            // resolving items / running review, drop this one.
+            if (myGen != planGeneration.get()) {
+                log.info("Planner: plan generation {} superseded by {}, dropping callback",
+                        myGen, planGeneration.get());
+                return;
+            }
+
+            // Push enriched plan to context so the next chat turn sees the
+            // sourced items in its system prompt.
+            contextAssembler.setCurrentPlan(enriched);
+
+            // Notify UI / overlay controller
+            PlanCallback cb = onPlanCreated;
+            if (cb != null) {
+                try {
+                    cb.onPlan(userMessage, enriched, review);
+                } catch (Exception cbErr) {
+                    log.warn("onPlanCreated callback threw: {}", cbErr.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Planner failed for goal '{}': {}", userMessage, e.getMessage());
         }
     }
 }

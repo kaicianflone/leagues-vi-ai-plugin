@@ -34,7 +34,7 @@ public class PluginLifecycleTest {
         // consistent reference.
         String[] volatileFields = {
                 "taskRepo", "vectorIndex", "openAiClient",
-                "chatService", "adviceService", "currentApiKey"
+                "chatService", "coachPulseService", "currentApiKey"
         };
         for (String name : volatileFields) {
             Field f = LeaguesAiPlugin.class.getDeclaredField(name);

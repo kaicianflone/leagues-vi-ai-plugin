@@ -1,6 +1,7 @@
 package com.leaguesai.overlay;
 
 import com.leaguesai.agent.PlannedStep;
+import com.leaguesai.data.model.Task;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Before;
 import org.junit.Test;
@@ -9,6 +10,7 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Map;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -27,13 +29,14 @@ public class OverlayControllerTest {
     @Mock private WorldMapOverlay worldMap;
     @Mock private PathOverlay path;
     @Mock private WidgetOverlay widget;
+    @Mock private RequiredItemsOverlay requiredItems;
 
     private OverlayController controller;
 
     @Before
     public void setUp() {
         MockitoAnnotations.openMocks(this);
-        controller = new OverlayController(tile, arrow, npc, object, item, minimap, worldMap, path, widget);
+        controller = new OverlayController(tile, arrow, npc, object, item, minimap, worldMap, path, widget, requiredItems);
     }
 
     @Test
@@ -48,6 +51,27 @@ public class OverlayControllerTest {
         verify(worldMap).clear();
         verify(path).clear();
         verify(widget).clear();
+        verify(requiredItems).clear();
+    }
+
+    @Test
+    public void setActiveStep_taskWithItemsRequired_setsRequiredItemsOverlay() {
+        Map<String, Integer> items = Map.of("Tinderbox", 1, "Bronze axe", 1);
+        Task t = Task.builder().id("t1").name("Chop a tree")
+                .itemsRequired(items).build();
+        OverlayData data = OverlayData.builder().build();
+        PlannedStep step = PlannedStep.builder().task(t).overlayData(data).build();
+        controller.setActiveStep(step);
+        verify(requiredItems).setRequiredItems(items);
+    }
+
+    @Test
+    public void setActiveStep_taskWithNoItemsRequired_clearsRequiredItemsOverlay() {
+        Task t = Task.builder().id("t1").name("Run").build();
+        OverlayData data = OverlayData.builder().build();
+        PlannedStep step = PlannedStep.builder().task(t).overlayData(data).build();
+        controller.setActiveStep(step);
+        verify(requiredItems).setRequiredItems(Collections.emptyMap());
     }
 
     @Test

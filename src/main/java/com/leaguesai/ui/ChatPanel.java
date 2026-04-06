@@ -3,9 +3,12 @@ package com.leaguesai.ui;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 
 public class ChatPanel extends JPanel {
@@ -19,16 +22,23 @@ public class ChatPanel extends JPanel {
     private static final Color AI_BUBBLE = new Color(60, 60, 60);
     private static final Color ERROR_BUBBLE = new Color(120, 30, 30);
     private static final int BUBBLE_MAX_WIDTH = 180;
+    /** Cap on retained message history to keep memory bounded across long sessions. */
+    private static final int MAX_CHAT_HISTORY = 200;
 
     private final JPanel messageList;
     private final JScrollPane scrollPane;
     private final JTextField inputField;
     private final JButton sendButton;
+    private final JButton copyButton;
+    private final JButton goalsLinkButton;
     private final JLabel loadingLabel;
+    private final JLabel heartbeatLabel;
+    private final List<String> messageHistory = new ArrayList<>();
 
     private JPanel emptyStatePanel;
 
     private Consumer<String> onSendMessage;
+    private Runnable onOpenGoals;
 
     public ChatPanel() {
         setLayout(new BorderLayout(0, 4));
@@ -46,7 +56,42 @@ public class ChatPanel extends JPanel {
         scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.setBorder(null);
         scrollPane.getViewport().setBackground(BACKGROUND_COLOR);
-        add(scrollPane, BorderLayout.CENTER);
+
+        // Top toolbar: [Goals link  ··  Copy chat]
+        JPanel toolbar = new JPanel(new BorderLayout());
+        toolbar.setBackground(BACKGROUND_COLOR);
+        toolbar.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
+
+        goalsLinkButton = new JButton("\uD83C\uDFAF Goals");
+        goalsLinkButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        goalsLinkButton.setBackground(new Color(55, 55, 55));
+        goalsLinkButton.setForeground(new Color(120, 170, 240));
+        goalsLinkButton.setFocusPainted(false);
+        goalsLinkButton.setBorderPainted(false);
+        goalsLinkButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        goalsLinkButton.setMargin(new Insets(2, 8, 2, 8));
+        goalsLinkButton.addActionListener(e -> {
+            if (onOpenGoals != null) onOpenGoals.run();
+        });
+
+        copyButton = new JButton("Copy chat");
+        copyButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        copyButton.setBackground(new Color(55, 55, 55));
+        copyButton.setForeground(TEXT_COLOR);
+        copyButton.setFocusPainted(false);
+        copyButton.setBorderPainted(false);
+        copyButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        copyButton.setMargin(new Insets(2, 8, 2, 8));
+        copyButton.addActionListener(e -> copyChatToClipboard());
+
+        toolbar.add(goalsLinkButton, BorderLayout.WEST);
+        toolbar.add(copyButton, BorderLayout.EAST);
+
+        JPanel center = new JPanel(new BorderLayout());
+        center.setBackground(BACKGROUND_COLOR);
+        center.add(toolbar, BorderLayout.NORTH);
+        center.add(scrollPane, BorderLayout.CENTER);
+        add(center, BorderLayout.CENTER);
 
         appendEmptyState();
 
@@ -57,6 +102,12 @@ public class ChatPanel extends JPanel {
         loadingLabel.setHorizontalAlignment(SwingConstants.LEFT);
         loadingLabel.setVisible(false);
         loadingLabel.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+
+        // Heartbeat label — driven by HeartbeatTicker every 60s
+        heartbeatLabel = new JLabel(" ");
+        heartbeatLabel.setForeground(new Color(150, 200, 150));
+        heartbeatLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        heartbeatLabel.setBorder(BorderFactory.createEmptyBorder(2, 2, 4, 2));
 
         // Input panel
         JPanel inputPanel = new JPanel(new BorderLayout(4, 0));
@@ -81,7 +132,16 @@ public class ChatPanel extends JPanel {
         sendButton.setBorderPainted(false);
         sendButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        inputPanel.add(loadingLabel, BorderLayout.NORTH);
+        // North of the input row stacks heartbeat + loading indicator
+        JPanel northStack = new JPanel();
+        northStack.setLayout(new BoxLayout(northStack, BoxLayout.Y_AXIS));
+        northStack.setBackground(BACKGROUND_COLOR);
+        heartbeatLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        loadingLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        northStack.add(heartbeatLabel);
+        northStack.add(loadingLabel);
+
+        inputPanel.add(northStack, BorderLayout.NORTH);
         inputPanel.add(inputField, BorderLayout.CENTER);
         inputPanel.add(sendButton, BorderLayout.EAST);
 
@@ -110,6 +170,11 @@ public class ChatPanel extends JPanel {
     }
 
     public void appendMessage(String sender, String message) {
+        messageHistory.add(sender + ": " + message);
+        // Cap history to bound memory across very long sessions.
+        while (messageHistory.size() > MAX_CHAT_HISTORY) {
+            messageHistory.remove(0);
+        }
         SwingUtilities.invokeLater(() -> {
             clearEmptyStateIfPresent();
             boolean isUser = "You".equalsIgnoreCase(sender);
@@ -178,9 +243,14 @@ public class ChatPanel extends JPanel {
         };
         emptyStatePanel.setLayout(new BoxLayout(emptyStatePanel, BoxLayout.Y_AXIS));
         emptyStatePanel.setBackground(messageList.getBackground());
-        JLabel label = new JLabel("Ask your AI coach anything about Leagues VI...");
+        // HTML label so Swing wraps the text. Width matches panel content area.
+        JLabel label = new JLabel(
+                "<html><div style='text-align:center;width:170px'>"
+                        + "Ask your AI coach anything about Leagues VI..."
+                        + "</div></html>");
         label.setForeground(new Color(150, 150, 150));
         label.setAlignmentX(Component.CENTER_ALIGNMENT);
+        label.setHorizontalAlignment(SwingConstants.CENTER);
         label.setFont(new Font(Font.SANS_SERIF, Font.ITALIC, 11));
         emptyStatePanel.add(Box.createVerticalStrut(40));
         emptyStatePanel.add(label);
@@ -238,13 +308,49 @@ public class ChatPanel extends JPanel {
         });
     }
 
+    /** Heartbeat label setter — driven by HeartbeatTicker. EDT-safe. */
+    public void setHeartbeatText(String text) {
+        SwingUtilities.invokeLater(() ->
+                heartbeatLabel.setText(text == null || text.isEmpty() ? " " : text));
+    }
+
+    /** Wire the "Goals" link in the toolbar. */
+    public void setOnOpenGoals(Runnable callback) {
+        this.onOpenGoals = callback;
+    }
+
     public void clearChat() {
+        messageHistory.clear();
         SwingUtilities.invokeLater(() -> {
             messageList.removeAll();
             appendEmptyState();
             messageList.revalidate();
             messageList.repaint();
         });
+    }
+
+    private void copyChatToClipboard() {
+        if (messageHistory.isEmpty()) {
+            flashCopyButton("Nothing to copy");
+            return;
+        }
+        String dump = String.join("\n\n", messageHistory);
+        try {
+            Toolkit.getDefaultToolkit()
+                    .getSystemClipboard()
+                    .setContents(new StringSelection(dump), null);
+            flashCopyButton("Copied!");
+        } catch (Exception e) {
+            flashCopyButton("Copy failed");
+        }
+    }
+
+    private void flashCopyButton(String text) {
+        String original = "Copy chat";
+        copyButton.setText(text);
+        Timer t = new Timer(1500, e -> copyButton.setText(original));
+        t.setRepeats(false);
+        t.start();
     }
 
     private String escapeHtml(String s) {

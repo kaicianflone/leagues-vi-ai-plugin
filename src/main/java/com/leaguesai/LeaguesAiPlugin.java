@@ -58,9 +58,13 @@ public class LeaguesAiPlugin extends Plugin {
     @Inject private MinimapOverlay minimapOverlay;
     @Inject private PathOverlay pathOverlay;
     @Inject private WidgetOverlay widgetOverlay;
+    @Inject private RequiredItemsOverlay requiredItemsOverlay;
     @Inject private OverlayController overlayController;
 
     @Inject private PlayerContextAssembler contextAssembler;
+
+    // Constructed in loadDatabaseAsync() once TaskRepositoryImpl exists.
+    private volatile GoalPlanner goalPlanner;
 
     private LeaguesAiPanel panel;
     private NavigationButton navButton;
@@ -71,7 +75,15 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile VectorIndex vectorIndex;
     private volatile LlmClient openAiClient;
     private volatile ChatService chatService;
-    private volatile AdviceService adviceService;
+    private volatile CoachPulseService coachPulseService;
+    private volatile com.leaguesai.ui.HeartbeatTicker heartbeatTicker;
+
+    /**
+     * Set to true at the very top of {@link #shutDown()}. Any in-flight
+     * background task that wants to rebuild services / start the heartbeat
+     * checks this and bails so we never resurrect a torn-down ticker.
+     */
+    private volatile boolean shuttingDown = false;
 
     // Tracks the API key the current OpenAiClient was built with so we only
     // rebuild (and tear down OkHttp resources) on actual change.
@@ -95,7 +107,7 @@ public class LeaguesAiPlugin extends Plugin {
         panel = new LeaguesAiPanel(config.animationSpeed());
         panel.getSettingsPanel().setDatabaseStatus("Loading task database...", false);
 
-        final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/icon.png");
+        final BufferedImage icon = ImageUtil.loadImageResource(LeaguesAiPlugin.class, "icon.png");
         navButton = NavigationButton.builder()
             .tooltip("Leagues AI")
             .icon(icon)
@@ -112,6 +124,8 @@ public class LeaguesAiPlugin extends Plugin {
         // Overlays that maintain caches via spawn/despawn events must be on the bus
         eventBus.register(objectOverlay);
         eventBus.register(groundItemOverlay);
+        // ArrowOverlay needs GameTick for its blink cadence (ported from Quest Helper)
+        eventBus.register(arrowOverlay);
 
         // Register overlays
         overlayManager.add(tileOverlay);
@@ -122,6 +136,7 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.add(minimapOverlay);
         overlayManager.add(pathOverlay);
         overlayManager.add(widgetOverlay);
+        overlayManager.add(requiredItemsOverlay);
 
         // Async load the database so the game thread is not blocked
         llmExecutor.submit(this::loadDatabaseAsync);
@@ -147,6 +162,7 @@ public class LeaguesAiPlugin extends Plugin {
 
             taskRepo = new TaskRepositoryImpl(tasks, areas);
             vectorIndex = new VectorIndex(embeddings);
+            goalPlanner = new GoalPlanner(taskRepo);
 
             String apiKey = config.openaiApiKey();
             LlmClient previous = openAiClient;
@@ -174,8 +190,11 @@ public class LeaguesAiPlugin extends Plugin {
             openAiClient = newClient;
             usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
-            chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
-            adviceService = new AdviceService(openAiClient, contextAssembler);
+            chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+            attachPlanCallback(chatService);
+            coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
+            // (Re)build the heartbeat ticker so it points at the new client.
+            rebuildHeartbeatTicker();
             if (previous != null) {
                 previous.close();
             }
@@ -252,8 +271,10 @@ public class LeaguesAiPlugin extends Plugin {
                     LlmClient newClient = new CodexOauthClient("gpt-5-codex");
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
-                        chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex);
-                        adviceService = new AdviceService(newClient, contextAssembler);
+                        chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                        attachPlanCallback(chatService);
+                        coachPulseService = new CoachPulseService(newClient, contextAssembler);
+                        rebuildHeartbeatTicker();
                     }
                     usingCodexOauth = true;
                     if (old != null) {
@@ -290,6 +311,80 @@ public class LeaguesAiPlugin extends Plugin {
         });
     }
 
+    /**
+     * Attach the plan-created callback to a freshly-built ChatService so that
+     * a successful planner run updates the goals panel (accordion + review
+     * banner) and the overlay controller. The chat panel intentionally does
+     * NOT receive the plan — chat is chat-only now.
+     */
+    private void attachPlanCallback(ChatService svc) {
+        if (svc == null) return;
+        svc.setOnPlanCreated((goal, steps, review) -> {
+            if (panel == null || steps == null || steps.isEmpty()) return;
+            final int total = steps.size();
+            final String safeGoal = goal == null ? "" : goal;
+
+            // Goals panel: goal title, progress, review banner, accordion
+            panel.getGoalsPanel().setGoal(safeGoal);
+            panel.getGoalsPanel().setProgress(0, total);
+            panel.getGoalsPanel().setReviewBanner(review);
+            panel.getGoalsPanel().setSteps(steps);
+
+            SwingUtilities.invokeLater(() -> {
+                panel.setStatus("Plan: " + (safeGoal.length() > 30 ? safeGoal.substring(0, 27) + "..." : safeGoal));
+                panel.setProgress(0, total);
+            });
+
+            // Overlay controller: activate the first step so arrows/highlights appear in-game
+            PlannedStep first = steps.get(0);
+            if (first != null && overlayController != null) {
+                SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first));
+                log.info("Plan callback: activating first step '{}' — location={}, npcIds={}, objIds={}",
+                        first.getInstruction(),
+                        first.getDestination(),
+                        first.getOverlayData() != null ? first.getOverlayData().getTargetNpcIds() : "none",
+                        first.getOverlayData() != null ? first.getOverlayData().getTargetObjectIds() : "none");
+            }
+
+            long withLocation = steps.stream().filter(s -> s.getDestination() != null).count();
+            log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
+                    total, withLocation, review != null);
+        });
+    }
+
+    /**
+     * (Re)build the heartbeat ticker so it picks up the freshly built coach
+     * pulse service. Stops any prior ticker first. Safe to call repeatedly.
+     */
+    private void rebuildHeartbeatTicker() {
+        if (panel == null) return;
+        // Refuse to rebuild during teardown — otherwise an in-flight
+        // background task can resurrect a ticker after shutDown() ran.
+        if (shuttingDown) {
+            log.info("rebuildHeartbeatTicker: skipped (plugin is shutting down)");
+            return;
+        }
+        com.leaguesai.ui.HeartbeatTicker old = heartbeatTicker;
+        if (old != null) {
+            SwingUtilities.invokeLater(old::stop);
+        }
+        com.leaguesai.ui.HeartbeatTicker fresh = new com.leaguesai.ui.HeartbeatTicker(
+                panel.getChatPanel(),
+                panel.getGoalsPanel(),
+                new LocalHeartbeat(),
+                coachPulseService,
+                contextAssembler,
+                llmExecutor
+        );
+        heartbeatTicker = fresh;
+        // Re-check the flag inside the EDT lambda — shutDown may have flipped
+        // it after we built `fresh` but before the EDT runs the start.
+        SwingUtilities.invokeLater(() -> {
+            if (shuttingDown) return;
+            fresh.start();
+        });
+    }
+
     private void setupPanelCallbacks() {
         // Chat send
         panel.getChatPanel().setOnSendMessage(message -> {
@@ -315,34 +410,14 @@ public class LeaguesAiPlugin extends Plugin {
             });
         });
 
-        // Advice refresh
-        panel.getAdvicePanel().setOnRefresh(() -> {
-            if (adviceService == null) {
-                panel.getAdvicePanel().showError("Database not loaded yet.");
-                return;
-            }
-            panel.getAdvicePanel().setLoading(true);
-            llmExecutor.submit(() -> {
-                try {
-                    String advice = adviceService.getAdvice();
-                    SwingUtilities.invokeLater(() -> {
-                        panel.getAdvicePanel().setAdvice(advice);
-                        panel.getAdvicePanel().setLoading(false);
-                    });
-                } catch (Exception e) {
-                    log.error("Advice error", e);
-                    SwingUtilities.invokeLater(() -> {
-                        panel.getAdvicePanel().showError(e.getMessage());
-                        panel.getAdvicePanel().setLoading(false);
-                    });
-                }
-            });
-        });
+        // Cross-panel navigation links
+        panel.getChatPanel().setOnOpenGoals(() -> panel.switchToGoalsTab());
+        panel.getGoalsPanel().setOnOpenChat(() -> panel.switchToChatTab());
 
         // Settings — goal
         panel.getSettingsPanel().setOnGoalSet(goal -> {
             contextAssembler.setCurrentGoal(goal);
-            panel.getAdvicePanel().setGoal(goal);
+            panel.getGoalsPanel().setGoal(goal);
             log.info("Goal set: {}", goal);
         });
 
@@ -365,8 +440,10 @@ public class LeaguesAiPlugin extends Plugin {
                 LlmClient old = openAiClient;
                 openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
-                    chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
-                    adviceService = new AdviceService(openAiClient, contextAssembler);
+                    chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    attachPlanCallback(chatService);
+                    coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
+                    rebuildHeartbeatTicker();
                     log.info("OpenAI client rebuilt with new API key");
                     SwingUtilities.invokeLater(() ->
                         panel.getSettingsPanel().setDatabaseStatus(
@@ -395,11 +472,15 @@ public class LeaguesAiPlugin extends Plugin {
 
     @Override
     protected void shutDown() throws Exception {
+        // Set this BEFORE doing anything else so any in-flight background
+        // task that tries to rebuild services / start the heartbeat bails.
+        shuttingDown = true;
         eventBus.unregister(xpMonitor);
         eventBus.unregister(inventoryMonitor);
         eventBus.unregister(locationMonitor);
         eventBus.unregister(objectOverlay);
         eventBus.unregister(groundItemOverlay);
+        eventBus.unregister(arrowOverlay);
 
         overlayManager.remove(tileOverlay);
         overlayManager.remove(arrowOverlay);
@@ -409,8 +490,27 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.remove(minimapOverlay);
         overlayManager.remove(pathOverlay);
         overlayManager.remove(widgetOverlay);
+        overlayManager.remove(requiredItemsOverlay);
 
         overlayController.clearAll();
+
+        // Stop the heartbeat ticker before tearing down the executor it uses.
+        // invokeAndWait throws IllegalStateException (an Error subclass parent
+        // is Throwable, but it's RuntimeException-class) if called from the EDT,
+        // so guard with isEventDispatchThread().
+        if (heartbeatTicker != null) {
+            final com.leaguesai.ui.HeartbeatTicker ticker = heartbeatTicker;
+            try {
+                if (SwingUtilities.isEventDispatchThread()) {
+                    ticker.stop();
+                } else {
+                    SwingUtilities.invokeAndWait(ticker::stop);
+                }
+            } catch (Throwable t) {
+                log.warn("HeartbeatTicker shutdown failed: {}", t.getMessage());
+            }
+            heartbeatTicker = null;
+        }
 
         // Stop the sprite animation timer before disposing the panel.
         if (panel != null && panel.getSpriteRenderer() != null) {

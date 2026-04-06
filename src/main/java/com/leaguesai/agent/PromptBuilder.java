@@ -30,6 +30,32 @@ public class PromptBuilder {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
 
+        sb.append(buildIronmanDoctrine());
+
+        sb.append("## How To Help The Player\n");
+        sb.append("1. **Read what you already know.** The Player State, Skills, Inventory, ");
+        sb.append("Equipment, Unlocked Areas, and Completed Tasks sections below contain LIVE ");
+        sb.append("data from the player's RuneLite client. Always check these BEFORE asking ");
+        sb.append("the player to repeat that information. If you can answer from context, do so.\n");
+        sb.append("2. **Ask clarifying questions when the goal is ambiguous.** Examples: ");
+        sb.append("\"Do you want max points per hour, or fastest area unlock?\" ");
+        sb.append("\"Are you OK with combat tasks or skilling only?\" ");
+        sb.append("\"Which relics are you targeting?\" Get the player's intent clear before planning.\n");
+        sb.append("3. **Propose plans in plain English first.** Walk through the suggested ");
+        sb.append("approach conversationally so the player can correct course.\n");
+        sb.append("4. **To commit a real plan,** the player needs to use a phrase the ");
+        sb.append("planner recognises. The plugin watches for natural phrasings like ");
+        sb.append("\"make me a plan for karamja easy tasks\", \"complete all the karamja easy tasks\", ");
+        sb.append("\"plan out karamja easy\", \"do all the karamja easy tasks\", \"i want to finish all karamja easy\", ");
+        sb.append("or the explicit `/plan complete all karamja easy tasks`. Any of these will trigger the ");
+        sb.append("deterministic planner over the local task database and load an Active Plan ");
+        sb.append("that you'll see in subsequent messages. When suggesting next steps, naturally ");
+        sb.append("encourage one of these phrasings — don't insist on the slash command. Do NOT ");
+        sb.append("pretend to have a plan loaded unless the \"Active Plan\" section below shows one.\n");
+        sb.append("5. **Never invent tasks.** Only reference tasks that appear in the Active ");
+        sb.append("Plan or Relevant Tasks sections, or that you know from genuine OSRS knowledge. ");
+        sb.append("If you're unsure whether a task exists in Leagues VI, say so instead of guessing.\n\n");
+
         // Player State
         sb.append("## Player State\n");
         sb.append("- Combat Level: ").append(ctx.getCombatLevel()).append("\n");
@@ -78,18 +104,27 @@ public class PromptBuilder {
         sb.append("## Current Goal\n");
         sb.append(ctx.getCurrentGoal() != null ? ctx.getCurrentGoal() : "None").append("\n\n");
 
-        // Current Plan (next 5 steps)
-        sb.append("## Current Plan (next 5 steps)\n");
+        // Current Plan
         List<PlannedStep> plan = ctx.getCurrentPlan();
         if (plan != null && !plan.isEmpty()) {
-            int limit = Math.min(5, plan.size());
+            int limit = Math.min(20, plan.size());
+            sb.append("## Active Plan (").append(plan.size()).append(" tasks total, showing first ")
+                    .append(limit).append(")\n");
             for (int i = 0; i < limit; i++) {
                 PlannedStep step = plan.get(i);
                 String instruction = step.getInstruction() != null ? step.getInstruction() : "(no instruction)";
-                sb.append(i + 1).append(". ").append(instruction).append("\n");
+                sb.append(i + 1).append(". ").append(instruction);
+                if (step.getTask() != null && step.getTask().getArea() != null) {
+                    sb.append(" [").append(step.getTask().getArea()).append("]");
+                }
+                sb.append("\n");
             }
+            sb.append("\n**IMPORTANT: An active plan is loaded above. When the user asks about tasks, ");
+            sb.append("walk them through this plan in order. Do NOT invent tasks — only reference the ");
+            sb.append("ones in the Active Plan list. Use the exact names shown.**\n");
         } else {
-            sb.append("- No steps planned yet.\n");
+            sb.append("## Current Plan\n- No plan set. User can trigger planning by saying things like ");
+            sb.append("\"complete all karamja easy tasks\".\n");
         }
 
         // Relevant Tasks (from RAG retrieval) — only included when non-empty
@@ -128,6 +163,101 @@ public class PromptBuilder {
             sb.append("\n");
             count++;
         }
+    }
+
+    /**
+     * The Ironman Coaching Doctrine — embedded near the top of every system
+     * prompt so the LLM coaches in the style of B0aty / Faux / top UIM players.
+     * Pure prompt engineering: no external knowledge files, no scraping.
+     * Cheap to iterate when player feedback comes in.
+     */
+    static String buildIronmanDoctrine() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Ironman Coaching Doctrine\n");
+        sb.append("You are coaching an Ironman in Leagues VI. Your style is shaped by these influences:\n");
+        sb.append("- B0aty (HCIM): survivability first. Never recommend a step that risks death without a hard warning. ");
+        sb.append("Prefer safer alternatives even at small XP/hour cost. Always name the safer alt.\n");
+        sb.append("- Faux (efficient skiller): rates matter. When recommending training, name the GP/xp/hr and the bottleneck resource. ");
+        sb.append("Prefer methods that double up on a Leagues task.\n");
+        sb.append("- Top UIM (no-bank logistics): inventory is sacred. Group tasks geographically. Never recommend a return trip ");
+        sb.append("when one tile-walk away there is a second task. Carry only what is needed for the next 3 tasks.\n");
+        sb.append("- All three: ironman-only sources. NEVER suggest a GE/trade/group-ironman fix.\n");
+        sb.append("- Best methods, not popular methods. If the wiki \"fastest\" route requires content the player has not unlocked, ");
+        sb.append("fall back to the best available and explicitly say why.\n\n");
+        sb.append("Behavioral rules:\n");
+        sb.append("- When you mention an item, also state where an ironman gets it, in one phrase.\n");
+        sb.append("- For makeable items, walk back the prereq chain to a gatherable.\n");
+        sb.append("- For combat tasks, always state the recommended gear tier the player actually owns (read Equipment + Inventory above).\n");
+        sb.append("- Never say \"buy X\" or \"trade for X\".\n\n");
+        return sb.toString();
+    }
+
+    /**
+     * Prompt for the every-5-minute "coach pulse" — a single short sentence
+     * the heartbeat displays in both panels. Must fit in ~110 chars.
+     */
+    public static String buildCoachPulsePrompt(PlayerContext ctx) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Give me ONE short sentence (max 110 characters) of in-the-moment coaching for the player ");
+        sb.append("based on their current state above. Be encouraging if they're on pace, gently push if they're stalled, ");
+        sb.append("and celebrate if they just hit a milestone. Use one emoji at the start. No preamble, just the sentence.");
+        return sb.toString();
+    }
+
+    /**
+     * Prompt for {@link ItemSourceResolver}. Asks for one line per item naming
+     * the best ironman acquisition path, including the prereq chain for makeables.
+     */
+    public static String buildItemSourcePrompt(java.util.Collection<String> itemNames) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("For each item below, give the best ironman acquisition path in OSRS Leagues VI. ");
+        sb.append("ONE line per item, naming the source NPC / skill method / drop. ");
+        sb.append("For makeable items, include the prerequisite chain back to a gatherable resource. ");
+        sb.append("Never recommend GE, trade, or group-ironman shortcuts. Be terse.\n\n");
+        sb.append("Format strictly as:\n");
+        sb.append("ITEM_NAME :: source line\n\n");
+        sb.append("Items:\n");
+        for (String name : itemNames) {
+            sb.append("- ").append(name).append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Prompt for {@link PersonaReviewer}. Asks the LLM to roleplay three
+     * ironman archetypes adversarially reviewing the just-built plan.
+     */
+    public static String buildPersonaReviewPrompt(String goal, List<PlannedStep> plan) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are simultaneously THREE ironman experts adversarially reviewing the Leagues VI plan below.\n\n");
+        sb.append("- B0aty (Hardcore Ironman): obsesses over route safety, death risk, and survivability.\n");
+        sb.append("- Faux (efficient skiller): obsesses over xp/hr, gp/hr, and bottleneck resources.\n");
+        sb.append("- Top UIM (no-bank logistics): obsesses over inventory pressure and route adjacency.\n\n");
+        sb.append("Each picks the SINGLE biggest issue with this plan from their lens, in one sentence. ");
+        sb.append("Then output a verdict line: \"Verdict: keep\" / \"Verdict: revise\" / \"Verdict: rebuild\".\n\n");
+        sb.append("Output format (exact):\n");
+        sb.append("B0aty: <one sentence>\n");
+        sb.append("Faux: <one sentence>\n");
+        sb.append("UIM: <one sentence>\n");
+        sb.append("Verdict: <keep|revise|rebuild>\n\n");
+        sb.append("Goal: ").append(goal == null ? "(none)" : goal).append("\n\n");
+        sb.append("Plan:\n");
+        if (plan != null) {
+            int limit = Math.min(plan.size(), 25);
+            for (int i = 0; i < limit; i++) {
+                PlannedStep s = plan.get(i);
+                String instr = s.getInstruction() != null ? s.getInstruction() : "(step)";
+                sb.append(i + 1).append(". ").append(instr);
+                if (s.getTask() != null && s.getTask().getArea() != null) {
+                    sb.append(" [").append(s.getTask().getArea()).append("]");
+                }
+                sb.append("\n");
+            }
+            if (plan.size() > limit) {
+                sb.append("(+ ").append(plan.size() - limit).append(" more tasks)\n");
+            }
+        }
+        return sb.toString();
     }
 
     /**

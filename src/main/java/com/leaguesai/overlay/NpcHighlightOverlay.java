@@ -10,12 +10,14 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.util.Collections;
 import java.util.List;
 
+@Singleton
 public class NpcHighlightOverlay extends Overlay {
 
     private final Client client;

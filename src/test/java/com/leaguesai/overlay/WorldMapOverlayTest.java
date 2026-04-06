@@ -8,6 +8,7 @@ import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 
 import static org.junit.Assert.*;
@@ -24,6 +25,7 @@ public class WorldMapOverlayTest {
     public void setUp() {
         client = mock(Client.class);
         config = mock(LeaguesAiConfig.class);
+        when(config.overlayColor()).thenReturn(Color.CYAN);
         manager = mock(WorldMapPointManager.class);
         overlay = new WorldMapOverlay(client, config, manager);
     }

@@ -105,7 +105,7 @@ public class ChatServiceRagTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[{\"message\":{\"content\":\"Try Slay a Goblin first\"}}]}"));
 
-        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
+        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, null);
         String reply = chat.sendMessage("What should I do for combat?");
 
         assertEquals("Try Slay a Goblin first", reply);
@@ -141,7 +141,7 @@ public class ChatServiceRagTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"));
 
-        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, emptyIndex);
+        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, emptyIndex, null);
         String reply = chat.sendMessage("hello");
 
         assertEquals("hi", reply);
@@ -169,7 +169,7 @@ public class ChatServiceRagTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"choices\":[{\"message\":{\"content\":\"plain reply\"}}]}"));
 
-        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex);
+        ChatService chat = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, null);
         String reply;
         try {
             reply = chat.sendMessage("hello");
@@ -188,7 +188,7 @@ public class ChatServiceRagTest {
         RecordedRequest chatReq = server.takeRequest();
         String body = chatReq.getBody().readUtf8();
         // Plain prompt — no "Relevant Tasks" section since RAG failed.
-        assertFalse("system prompt should not include Relevant Tasks block on RAG failure",
-                body.contains("Relevant Tasks"));
+        assertFalse("system prompt should not include Relevant Tasks section on RAG failure",
+                body.contains("## Relevant Tasks"));
     }
 }
