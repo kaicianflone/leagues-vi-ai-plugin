@@ -1,1 +1,5 @@
 .superpowers/
+build/
+.gradle/
+*.class
+.DS_Store
