@@ -82,6 +82,8 @@ public class LeaguesAiPlugin extends Plugin {
     // ~/.codex/auth.json instead.
     private volatile boolean usingCodexOauth = false;
 
+    private volatile long loginWatchStartTime = 0;
+
     @Override
     protected void startUp() throws Exception {
         log.info("Leagues AI starting...");
@@ -126,6 +128,9 @@ public class LeaguesAiPlugin extends Plugin {
 
         // Wire panel callbacks (services may still be null until load finishes — guarded inside)
         setupPanelCallbacks();
+
+        // Wire sign-in button
+        panel.getSettingsPanel().setOnSignIn(this::launchCodexLogin);
     }
 
     private void loadDatabaseAsync() {
@@ -198,6 +203,74 @@ public class LeaguesAiPlugin extends Plugin {
                 panel.getSettingsPanel().setDatabaseStatus(
                     "Error loading: " + e.getMessage(), true));
         }
+    }
+
+    private void launchCodexLogin() {
+        llmExecutor.submit(() -> {
+            try {
+                // Capture current auth.json state
+                File authFile = new File(System.getProperty("user.home"), ".codex/auth.json");
+                long beforeMod = authFile.exists() ? authFile.lastModified() : 0L;
+
+                // Spawn codex login in a new Terminal window
+                String os = System.getProperty("os.name").toLowerCase();
+                ProcessBuilder pb;
+                if (os.contains("mac")) {
+                    pb = new ProcessBuilder("osascript", "-e",
+                        "tell application \"Terminal\" to do script \"codex login\"");
+                } else if (os.contains("linux")) {
+                    pb = new ProcessBuilder("x-terminal-emulator", "-e", "codex login");
+                } else {
+                    pb = new ProcessBuilder("cmd", "/c", "start", "cmd", "/k", "codex login");
+                }
+                pb.start();
+
+                // Wait for auth.json to update (up to 2 minutes)
+                loginWatchStartTime = System.currentTimeMillis();
+                boolean success = false;
+                while (System.currentTimeMillis() - loginWatchStartTime < 120_000) {
+                    Thread.sleep(2000);
+                    if (authFile.exists() && authFile.lastModified() > beforeMod) {
+                        success = true;
+                        break;
+                    }
+                }
+
+                if (success) {
+                    log.info("Codex login detected, rebuilding LLM client");
+                    LlmClient old = openAiClient;
+                    LlmClient newClient = new CodexOauthClient("gpt-5-codex");
+                    openAiClient = newClient;
+                    if (taskRepo != null && vectorIndex != null) {
+                        chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex);
+                        adviceService = new AdviceService(newClient, contextAssembler);
+                    }
+                    usingCodexOauth = true;
+                    if (old != null) {
+                        try { old.close(); } catch (Exception ignored) {}
+                    }
+                    SwingUtilities.invokeLater(() -> {
+                        panel.getSettingsPanel().setAuthMode("Auth: ChatGPT OAuth (from ~/.codex/auth.json)");
+                        panel.getSettingsPanel().setSignInButtonText("Re-authenticate with ChatGPT");
+                        panel.getSettingsPanel().setSignInButtonEnabled(true);
+                        panel.getChatPanel().appendMessage("System", "Signed in successfully.");
+                    });
+                } else {
+                    SwingUtilities.invokeLater(() -> {
+                        panel.getSettingsPanel().setSignInButtonText("Sign in with ChatGPT");
+                        panel.getSettingsPanel().setSignInButtonEnabled(true);
+                        panel.getChatPanel().showError("Login timed out after 2 minutes. Check if Terminal opened and whether you completed the browser flow.");
+                    });
+                }
+            } catch (Exception e) {
+                log.error("Failed to launch Codex login", e);
+                SwingUtilities.invokeLater(() -> {
+                    panel.getSettingsPanel().setSignInButtonText("Sign in with ChatGPT");
+                    panel.getSettingsPanel().setSignInButtonEnabled(true);
+                    panel.getChatPanel().showError("Failed to launch Codex login: " + e.getMessage());
+                });
+            }
+        });
     }
 
     private void setupPanelCallbacks() {

@@ -46,6 +46,15 @@ test {
     useJUnit()
 }
 
+// Dev run task — launches RuneLite with this plugin loaded
+task runPlugin(type: JavaExec) {
+    group = 'application'
+    description = 'Run RuneLite with the Leagues AI plugin loaded (use this instead of :run to avoid :scraper:run clash)'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass.set('com.leaguesai.LeaguesAiDevLauncher')
+    jvmArgs = ['-ea', '--add-exports=java.desktop/sun.awt=ALL-UNNAMED']
+}
+
 shadowJar {
     archiveClassifier.set('')
     relocate 'org.sqlite', 'com.leaguesai.shadow.sqlite'

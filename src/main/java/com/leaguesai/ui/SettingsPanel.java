@@ -17,6 +17,7 @@ public class SettingsPanel extends JPanel {
     private static final Color ERROR_TEXT_COLOR = new Color(220, 60, 60);
 
     private final JLabel authModeLabel;
+    private final JButton signInButton;
     private final JPasswordField apiKeyField;
     private final JLabel noApiKeyWarning;
     private final JCheckBox autoModeToggle;
@@ -28,6 +29,7 @@ public class SettingsPanel extends JPanel {
     private Consumer<String> onGoalSet;
     private Consumer<String> onApiKeyChanged;
     private Runnable onRefreshData;
+    private Runnable onSignIn;
 
     public SettingsPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -40,7 +42,20 @@ public class SettingsPanel extends JPanel {
         authModeLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
         authModeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         add(authModeLabel);
-        add(Box.createVerticalStrut(8));
+        add(Box.createVerticalStrut(4));
+
+        signInButton = new JButton("Sign in with ChatGPT");
+        signInButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signInButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        signInButton.addActionListener(e -> {
+            if (onSignIn != null) {
+                signInButton.setEnabled(false);
+                signInButton.setText("Opening Terminal... complete login there");
+                onSignIn.run();
+            }
+        });
+        add(signInButton);
+        add(Box.createVerticalStrut(10));
 
         // API Key section
         JLabel apiKeyLabel = createLabel("OpenAI API Key:");
@@ -198,8 +213,27 @@ public class SettingsPanel extends JPanel {
         this.onRefreshData = callback;
     }
 
+    public void setOnSignIn(Runnable handler) { this.onSignIn = handler; }
+
+    public void setSignInButtonText(String text) {
+        SwingUtilities.invokeLater(() -> signInButton.setText(text));
+    }
+
+    public void setSignInButtonEnabled(boolean enabled) {
+        SwingUtilities.invokeLater(() -> signInButton.setEnabled(enabled));
+    }
+
+    public void setSignInButtonVisible(boolean visible) {
+        SwingUtilities.invokeLater(() -> signInButton.setVisible(visible));
+    }
+
     public void setAuthMode(String label) {
         authModeLabel.setText(label);
+        if (label.contains("ChatGPT OAuth")) {
+            signInButton.setText("Re-authenticate with ChatGPT");
+        } else {
+            signInButton.setText("Sign in with ChatGPT");
+        }
     }
 
     public void setAuthModeLabel(String mode) {
