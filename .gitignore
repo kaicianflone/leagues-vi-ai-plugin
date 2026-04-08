@@ -1,5 +1,41 @@
-.superpowers/
+# ---- Build output ----
 build/
 .gradle/
+out/
 *.class
+
+# ---- IDE / editor ----
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.swp
+*~
+.project
+.classpath
+.settings/
+
+# ---- OS ----
 .DS_Store
+Thumbs.db
+
+# ---- Logs / crash reports ----
+*.log
+hs_err_pid*
+replay_pid*
+
+# ---- Secrets (defense in depth — these should never exist in the repo) ----
+.env
+.env.*
+local.properties
+secrets.properties
+auth.json
+credentials.json
+*.key
+*.pem
+
+# ---- Tool-specific noise ----
+.superpowers/
+.claude/
+.gstack/
