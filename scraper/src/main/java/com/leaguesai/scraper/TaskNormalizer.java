@@ -13,8 +13,28 @@ public class TaskNormalizer {
     private static final Pattern SKILL_REQ_PATTERN = Pattern.compile("(\\d+)\\s+(\\w+)");
 
     /**
+     * Wiki-to-RuneLite skill name aliases. Most wiki names match the RuneLite
+     * {@code Skill} enum directly once lowercased, but a few are spelled
+     * differently. Adding the canonical name here at scrape time means every
+     * downstream consumer (planner, prompt builder, tests) sees a single shape.
+     *
+     * <p>{@code "runecrafting"} → {@code "runecraft"} is the main offender
+     * because the OSRS Wiki uses the in-game display name "Runecrafting" while
+     * RuneLite's {@code Skill} enum is {@code RUNECRAFT}. Without this
+     * normalization, the planner's {@code skillsMet} check silently skips
+     * requirements it can't resolve and recommends unachievable tasks.
+     */
+    private static final Map<String, String> SKILL_ALIASES = new HashMap<>();
+    static {
+        SKILL_ALIASES.put("runecrafting", "runecraft");
+    }
+
+    /**
      * Parses a skill-requirement string such as {@code "50 Fishing 40 Cooking"}
-     * and returns a map of skill-name (lower-cased) → required level.
+     * and returns a map of skill-name (lower-cased, alias-normalised) → required
+     * level. The returned key is guaranteed to match a {@code Skill} enum value
+     * when uppercased, so downstream code can call {@code Skill.valueOf(key.toUpperCase())}
+     * without needing its own alias table.
      *
      * @param reqText raw requirement text; may be null or empty
      * @return map of skill name → level; empty map if nothing could be parsed
@@ -29,6 +49,7 @@ public class TaskNormalizer {
         while (matcher.find()) {
             int level = Integer.parseInt(matcher.group(1));
             String skill = matcher.group(2).toLowerCase();
+            skill = SKILL_ALIASES.getOrDefault(skill, skill);
             result.put(skill, level);
         }
         return result;

@@ -111,7 +111,7 @@ public class ChatService {
             // Assemble player context and build system prompt while still in sync
             // (contextAssembler.assemble() routes through ClientThread — safe to call here)
             PlayerContext ctx = contextAssembler.assemble();
-            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks);
+            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks, taskRepo);
 
             // Snapshot: copy the list so the network call doesn't need the lock
             snapshot = new ArrayList<>(conversationHistory);
@@ -226,23 +226,55 @@ public class ChatService {
         final long myGen = planGeneration.incrementAndGet();
 
         try {
-            List<Task> targets = goalPlanner.resolveGoalTasks(userMessage);
-            if (targets.isEmpty()) {
+            // Composite goal path: "plan unlock the Grimoire relic" etc. Parsed
+            // against the repo so the resolver works off real unlock costs
+            // and the player's current league-point balance, not keyword
+            // matching. Returns TASK_BATCH for phrases the parser doesn't
+            // recognise so we fall through to the existing flat path below.
+            PlayerContext ctxForParser = contextAssembler.assemble();
+            GoalSpec spec = GoalSpecParser.parse(userMessage, taskRepo);
+            List<Task> targets;
+            CompositeGoal composite = null;
+
+            if (spec.getType() == GoalType.RELIC
+                    || spec.getType() == GoalType.AREA
+                    || spec.getType() == GoalType.PACT) {
+                composite = goalPlanner.resolveCompositeGoal(spec, ctxForParser);
+                log.info("Composite goal resolved: type={} target={} reachable={} gap={} covered={} children={}",
+                        spec.getType(), spec.getTargetName(), composite.isReachable(),
+                        composite.getPointsGap(), composite.getCoveredBy(),
+                        composite.getChildren().size());
+                targets = new ArrayList<>(composite.getTaskBatch());
+            } else {
+                targets = goalPlanner.resolveGoalTasks(userMessage);
+            }
+
+            if (targets.isEmpty() && composite == null) {
                 log.info("Planner: no tasks matched goal '{}'", userMessage);
                 return;
             }
 
-            Set<String> completed = new HashSet<>(); // TODO: pull from contextAssembler when wired
-            List<Task> dag = goalPlanner.buildDag(targets, completed);
             List<Task> sorted;
-            try {
-                sorted = goalPlanner.topologicalSort(dag);
-            } catch (IllegalStateException cycle) {
-                log.warn("Planner: cycle detected, falling back to insertion order: {}", cycle.getMessage());
-                sorted = dag;
+            if (composite != null) {
+                // Task batch from the composite resolver is already curated
+                // and ordered by points-per-effort. Skip DAG expansion — we
+                // don't want prereq chains pulling in unrelated tasks for a
+                // relic unlock goal.
+                sorted = targets;
+            } else {
+                Set<String> completed = new HashSet<>(); // TODO: pull from contextAssembler when wired
+                List<Task> dag = goalPlanner.buildDag(targets, completed);
+                try {
+                    sorted = goalPlanner.topologicalSort(dag);
+                } catch (IllegalStateException cycle) {
+                    log.warn("Planner: cycle detected, falling back to insertion order: {}", cycle.getMessage());
+                    sorted = dag;
+                }
             }
 
-            WorldPoint loc = contextAssembler.assemble().getLocation();
+            // Reuse the context we already assembled at the top instead of
+            // routing through ClientThread again for the player's location.
+            WorldPoint loc = ctxForParser.getLocation();
             List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
 
             // Convert tasks → PlannedSteps with OverlayData populated from whatever
@@ -287,25 +319,32 @@ public class ChatService {
             contextAssembler.setCurrentPlan(steps);
             log.info("Planner: built {} planned steps for goal '{}'", steps.size(), userMessage);
 
-            // Enrich the plan with item sources (one LLM call). Failures
-            // degrade gracefully — the plan still loads.
+            // Enrich the plan with item sources + run persona review. Two LLM
+            // calls. Skipped entirely when the step list is empty (composite
+            // PACT goals, or composite relic/area goals where the player can
+            // already afford the unlock) — running a persona review on an
+            // empty plan burns tokens and produces junk verdict text.
             List<PlannedStep> enriched = steps;
-            if (itemSourceResolver != null) {
-                try {
-                    enriched = itemSourceResolver.resolveBatch(steps);
-                } catch (Exception resolverErr) {
-                    log.warn("Item source resolution failed: {}", resolverErr.getMessage());
-                }
-            }
-
-            // Adversarial persona review (one LLM call). May return null on failure.
             String review = null;
-            if (personaReviewer != null) {
-                try {
-                    review = personaReviewer.review(userMessage, enriched);
-                } catch (Exception revErr) {
-                    log.warn("Persona review failed: {}", revErr.getMessage());
+            if (!steps.isEmpty()) {
+                if (itemSourceResolver != null) {
+                    try {
+                        enriched = itemSourceResolver.resolveBatch(steps);
+                    } catch (Exception resolverErr) {
+                        log.warn("Item source resolution failed: {}", resolverErr.getMessage());
+                    }
                 }
+
+                if (personaReviewer != null) {
+                    try {
+                        review = personaReviewer.review(userMessage, enriched);
+                    } catch (Exception revErr) {
+                        log.warn("Persona review failed: {}", revErr.getMessage());
+                    }
+                }
+            } else {
+                log.info("Planner: empty step list (composite PACT or already-affordable goal), "
+                        + "skipping item source + persona review");
             }
 
             // Stale-plan guard: if the user fired another plan while we were

@@ -1,6 +1,10 @@
 package com.leaguesai.agent;
 
+import com.leaguesai.data.TaskRepository;
+import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.Pact;
+import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import net.runelite.api.Skill;
 import org.junit.Test;
@@ -8,6 +12,8 @@ import org.junit.Test;
 import java.util.*;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class PromptBuilderTest {
 
@@ -134,6 +140,92 @@ public class PromptBuilderTest {
         String prompt = PromptBuilder.buildSystemPrompt(ctx, Collections.emptyList());
         assertFalse("Should NOT contain Relevant Tasks header when empty",
                 prompt.contains("## Relevant Tasks"));
+    }
+
+    private static PlayerContext emptyCtx() {
+        return PlayerContext.builder()
+                .levels(new EnumMap<>(Skill.class))
+                .xp(new EnumMap<>(Skill.class))
+                .inventory(new HashMap<>())
+                .equipment(new HashMap<>())
+                .completedTasks(new HashSet<>())
+                .unlockedAreas(new HashSet<>(Collections.singletonList("Karamja")))
+                .location(null)
+                .leaguePoints(0)
+                .combatLevel(3)
+                .currentGoal("")
+                .currentPlan(new ArrayList<>())
+                .build();
+    }
+
+    @Test
+    public void testBuildSystemPrompt_withRepo_includesRelicsSection() {
+        TaskRepository repo = mock(TaskRepository.class);
+        Relic grimoire = Relic.builder()
+                .id("grimoire")
+                .name("Grimoire")
+                .tier(1)
+                .unlockCost(200)
+                .description("Auto-picks herbs for you.")
+                .build();
+        when(repo.getAllRelics()).thenReturn(Collections.singletonList(grimoire));
+        when(repo.getAllAreas()).thenReturn(Collections.emptyList());
+        when(repo.getAllPacts()).thenReturn(Collections.emptyList());
+
+        String prompt = PromptBuilder.buildSystemPrompt(emptyCtx(), Collections.emptyList(), repo);
+        assertTrue("should contain Relics header", prompt.contains("## Relics"));
+        assertTrue("should contain relic name", prompt.contains("Grimoire"));
+        assertTrue("should contain tier", prompt.contains("Tier 1"));
+        assertTrue("should contain cost", prompt.contains("200 pts"));
+        assertTrue("should contain description", prompt.contains("Auto-picks herbs"));
+    }
+
+    @Test
+    public void testBuildSystemPrompt_withRepo_includesAreasSection() {
+        TaskRepository repo = mock(TaskRepository.class);
+        Area karamja = Area.builder().id("Karamja").name("Karamja").unlockCost(0).build();
+        Area kourend = Area.builder().id("Kourend").name("Kourend").unlockCost(300).build();
+        when(repo.getAllRelics()).thenReturn(Collections.emptyList());
+        when(repo.getAllAreas()).thenReturn(Arrays.asList(karamja, kourend));
+        when(repo.getAllPacts()).thenReturn(Collections.emptyList());
+
+        String prompt = PromptBuilder.buildSystemPrompt(emptyCtx(), Collections.emptyList(), repo);
+        assertTrue("should contain Areas header", prompt.contains("## Areas"));
+        assertTrue("Karamja is in unlockedAreas, should render UNLOCKED",
+                prompt.contains("Karamja") && prompt.contains("UNLOCKED"));
+        assertTrue("Kourend is locked", prompt.contains("Kourend"));
+        assertTrue("zero-cost areas render as TBD", prompt.contains("cost TBD"));
+        assertTrue("300-cost area renders with pts", prompt.contains("300 pts"));
+    }
+
+    @Test
+    public void testBuildSystemPrompt_withRepo_includesPactsSectionAndBudget() {
+        TaskRepository repo = mock(TaskRepository.class);
+        Pact p = Pact.builder()
+                .id("A1")
+                .name("Nature's Call")
+                .effect("Nature runes regenerate 50% of the time")
+                .build();
+        when(repo.getAllRelics()).thenReturn(Collections.emptyList());
+        when(repo.getAllAreas()).thenReturn(Collections.emptyList());
+        when(repo.getAllPacts()).thenReturn(Collections.singletonList(p));
+
+        String prompt = PromptBuilder.buildSystemPrompt(emptyCtx(), Collections.emptyList(), repo);
+        assertTrue("should contain Pacts header", prompt.contains("## Demonic Pacts"));
+        assertTrue("should contain the 40-pact budget sentence",
+                prompt.contains("up to **40 pacts total**"));
+        assertTrue("should contain the 3-respec sentence",
+                prompt.contains("**3 full respecs**"));
+        assertTrue("should contain pact name", prompt.contains("Nature's Call"));
+        assertTrue("should contain pact effect", prompt.contains("Nature runes regenerate"));
+    }
+
+    @Test
+    public void testBuildSystemPrompt_nullRepo_omitsUnlockablesSections() {
+        String prompt = PromptBuilder.buildSystemPrompt(emptyCtx(), Collections.emptyList(), null);
+        assertFalse("null repo should omit Relics section", prompt.contains("## Relics"));
+        assertFalse("null repo should omit Areas section", prompt.contains("## Areas"));
+        assertFalse("null repo should omit Pacts section", prompt.contains("## Demonic Pacts"));
     }
 
     @Test

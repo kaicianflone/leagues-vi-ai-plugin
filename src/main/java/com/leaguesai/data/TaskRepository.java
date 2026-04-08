@@ -7,6 +7,7 @@ import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface TaskRepository {
     List<Task> getAllTasks();
@@ -23,4 +24,18 @@ public interface TaskRepository {
 
     /** All pacts loaded from the {@code pacts} table, in insertion order. */
     List<Pact> getAllPacts();
+
+    /**
+     * Case-insensitive name lookup. Returns the first relic whose name matches
+     * the given phrase as a substring or exact match. Used by
+     * {@code GoalSpecParser} to turn a phrase like "Grimoire" from
+     * {@code UnlockablesPanel} into a concrete relic.
+     */
+    Optional<Relic> findRelicByName(String name);
+
+    /** Case-insensitive name lookup (exact or substring). */
+    Optional<Area> findAreaByName(String name);
+
+    /** Case-insensitive name lookup (exact or substring). */
+    Optional<Pact> findPactByName(String name);
 }

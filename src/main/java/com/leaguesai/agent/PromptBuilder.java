@@ -1,11 +1,16 @@
 package com.leaguesai.agent;
 
+import com.leaguesai.data.TaskRepository;
+import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.Pact;
+import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import net.runelite.api.Skill;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class PromptBuilder {
 
@@ -18,15 +23,32 @@ public class PromptBuilder {
      * with no relevant tasks.
      */
     public static String buildSystemPrompt(PlayerContext ctx) {
-        return buildSystemPrompt(ctx, Collections.emptyList());
+        return buildSystemPrompt(ctx, Collections.emptyList(), null);
+    }
+
+    /**
+     * Two-arg overload kept for existing tests. Delegates to the three-arg
+     * form with no repo (so relic/area/pact sections are omitted).
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks) {
+        return buildSystemPrompt(ctx, relevantTasks, null);
     }
 
     /**
      * Builds a Markdown system prompt summarising the player's current state,
      * optionally including a list of relevant tasks retrieved from semantic
-     * search (RAG context).
+     * search (RAG context) and unlockables reference data (relics / areas /
+     * pacts) from the repo.
+     *
+     * <p>When {@code repo} is non-null and has relics / areas / pacts loaded,
+     * the prompt includes a condensed reference block for each category plus
+     * a sentence explaining the 40-pact / 3-respec Demonic Pacts mechanic.
+     * This is what lets the LLM answer questions like "what do I need to
+     * unlock Grimoire?" with real costs instead of guesses.
      */
-    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks) {
+    public static String buildSystemPrompt(PlayerContext ctx,
+                                           List<Task> relevantTasks,
+                                           TaskRepository repo) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
 
@@ -127,6 +149,16 @@ public class PromptBuilder {
             sb.append("\"complete all karamja easy tasks\".\n");
         }
 
+        // Unlockables reference: relics / areas / pacts. Only included when
+        // the repo is present AND has data. This is the LLM's source of
+        // truth for "what does Grimoire cost?" questions — without these
+        // sections the model guesses.
+        if (repo != null) {
+            appendRelicsSection(sb, repo);
+            appendAreasSection(sb, repo, ctx);
+            appendPactsSection(sb, repo);
+        }
+
         // Relevant Tasks (from RAG retrieval) — only included when non-empty
         if (relevantTasks != null && !relevantTasks.isEmpty()) {
             sb.append("\n## Relevant Tasks\n");
@@ -145,6 +177,92 @@ public class PromptBuilder {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Append a condensed relic reference: grouped by tier, name + cost +
+     * one-line effect. Skipped entirely when the repo has no relics loaded
+     * (e.g. scraper hasn't run).
+     */
+    private static void appendRelicsSection(StringBuilder sb, TaskRepository repo) {
+        List<Relic> relics = repo.getAllRelics();
+        if (relics == null || relics.isEmpty()) return;
+        sb.append("\n## Relics (Demonic Pacts League rewards)\n");
+        sb.append("Pick one relic per tier. Cost is in league points.\n");
+        for (Relic r : relics) {
+            if (r == null || r.getName() == null) continue;
+            sb.append("- Tier ").append(r.getTier())
+                    .append(" — ").append(r.getName());
+            if (r.getUnlockCost() > 0) {
+                sb.append(" (").append(r.getUnlockCost()).append(" pts)");
+            }
+            if (r.getDescription() != null && !r.getDescription().isEmpty()) {
+                String desc = r.getDescription();
+                if (desc.length() > 120) desc = desc.substring(0, 117) + "...";
+                sb.append(": ").append(desc);
+            }
+            sb.append("\n");
+        }
+    }
+
+    /**
+     * Append a condensed area reference with unlock cost and whether the
+     * player already has it. Uses {@code ctx.unlockedAreas} as the source of
+     * truth for unlock state. Missing unlock costs render as "cost TBD" so
+     * the LLM knows the data is incomplete (wiki hasn't published costs yet
+     * pre-launch).
+     */
+    private static void appendAreasSection(StringBuilder sb, TaskRepository repo, PlayerContext ctx) {
+        List<Area> areas = repo.getAllAreas();
+        if (areas == null || areas.isEmpty()) return;
+        Set<String> unlocked = ctx != null && ctx.getUnlockedAreas() != null
+                ? ctx.getUnlockedAreas() : Collections.emptySet();
+        sb.append("\n## Areas\n");
+        sb.append("Varlamore and Karamja are the universal starting areas. Up to 3 more can be unlocked during the league.\n");
+        for (Area a : areas) {
+            if (a == null || a.getName() == null) continue;
+            boolean isUnlocked = unlocked.contains(a.getId()) || unlocked.contains(a.getName());
+            sb.append("- ").append(a.getName());
+            if (a.getUnlockCost() > 0) {
+                sb.append(" (").append(a.getUnlockCost()).append(" pts)");
+            } else {
+                sb.append(" (cost TBD)");
+            }
+            sb.append(isUnlocked ? " — UNLOCKED" : " — locked");
+            sb.append("\n");
+        }
+    }
+
+    /**
+     * Append the pacts reference plus the 40-slot / 3-respec doctrine. Pact
+     * effects are the verbatim wiki text from the scraper (single line per
+     * pact is fine since the side panel truncates anyway).
+     */
+    private static void appendPactsSection(StringBuilder sb, TaskRepository repo) {
+        List<Pact> pacts = repo.getAllPacts();
+        if (pacts == null || pacts.isEmpty()) return;
+        sb.append("\n## Demonic Pacts\n");
+        sb.append("The player can select up to **40 pacts total** and has **3 full respecs** ");
+        sb.append("available during the league. Pact picks are the main strategic choice in ");
+        sb.append("Leagues VI — treat them seriously and always explain trade-offs when the player asks.\n");
+        int count = 0;
+        for (Pact p : pacts) {
+            if (p == null || p.getName() == null) continue;
+            sb.append("- ").append(p.getName());
+            if (p.getNodeType() != null && !p.getNodeType().isEmpty()) {
+                sb.append(" [").append(p.getNodeType()).append("]");
+            }
+            if (p.getEffect() != null && !p.getEffect().isEmpty()) {
+                String eff = p.getEffect();
+                if (eff.length() > 140) eff = eff.substring(0, 137) + "...";
+                sb.append(": ").append(eff);
+            }
+            sb.append("\n");
+            count++;
+            // Cap at 40 rows — enough to cover the whole pact list without
+            // blowing the prompt budget.
+            if (count >= 40) break;
+        }
     }
 
     private static void appendItemSection(StringBuilder sb, Map<String, Integer> items, int cap) {

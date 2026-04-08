@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -170,5 +171,67 @@ public class TaskRepositoryImpl implements TaskRepository {
     @Override
     public List<Pact> getAllPacts() {
         return new ArrayList<>(pactsById.values());
+    }
+
+    @Override
+    public Optional<Relic> findRelicByName(String name) {
+        if (name == null || name.isEmpty()) return Optional.empty();
+        String needle = name.toLowerCase();
+        // Two-pass: exact match first, then substring. Prevents "dragon" from
+        // shadowing an exact-name "Dragon" relic when another relic is named
+        // "Dragon Slayer" etc.
+        for (Relic r : relicsById.values()) {
+            if (r.getName() != null && r.getName().equalsIgnoreCase(name)) {
+                return Optional.of(r);
+            }
+        }
+        for (Relic r : relicsById.values()) {
+            if (r.getName() != null && r.getName().toLowerCase().contains(needle)) {
+                return Optional.of(r);
+            }
+        }
+        return Optional.empty();
+    }
+
+    @Override
+    public Optional<Area> findAreaByName(String name) {
+        if (name == null || name.isEmpty()) return Optional.empty();
+        String needle = name.toLowerCase();
+        for (Area a : areasById.values()) {
+            if (a.getName() != null && a.getName().equalsIgnoreCase(name)) {
+                return Optional.of(a);
+            }
+            // Phase 1 areas use the name as the id (e.g. "Karamja"), so match
+            // against the id too — the panel sends `plan unlock Karamja`.
+            if (a.getId() != null && a.getId().equalsIgnoreCase(name)) {
+                return Optional.of(a);
+            }
+        }
+        for (Area a : areasById.values()) {
+            if (a.getName() != null && a.getName().toLowerCase().contains(needle)) {
+                return Optional.of(a);
+            }
+        }
+        return Optional.empty();
+    }
+
+    @Override
+    public Optional<Pact> findPactByName(String name) {
+        if (name == null || name.isEmpty()) return Optional.empty();
+        String needle = name.toLowerCase();
+        for (Pact p : pactsById.values()) {
+            if (p.getName() != null && p.getName().equalsIgnoreCase(name)) {
+                return Optional.of(p);
+            }
+            if (p.getId() != null && p.getId().equalsIgnoreCase(name)) {
+                return Optional.of(p);
+            }
+        }
+        for (Pact p : pactsById.values()) {
+            if (p.getName() != null && p.getName().toLowerCase().contains(needle)) {
+                return Optional.of(p);
+            }
+        }
+        return Optional.empty();
     }
 }

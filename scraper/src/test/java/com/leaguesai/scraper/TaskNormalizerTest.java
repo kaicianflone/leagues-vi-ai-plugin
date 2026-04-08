@@ -57,6 +57,35 @@ public class TaskNormalizerTest {
         assertTrue("No matching pattern should yield empty map", result.isEmpty());
     }
 
+    @Test
+    public void testParseSkillRequirements_runecraftingAliasedToRunecraft() {
+        // The OSRS Wiki uses "Runecrafting" but RuneLite's Skill enum is
+        // RUNECRAFT. Without alias normalization, the planner's skillsMet
+        // check would fail to resolve "runecrafting" to a Skill value and
+        // silently skip the requirement, over-recommending tasks the player
+        // can't actually complete.
+        Map<String, Integer> result = TaskNormalizer.parseSkillRequirements("77 Runecrafting");
+        assertEquals(1, result.size());
+        assertTrue("runecrafting should be aliased to runecraft",
+                result.containsKey("runecraft"));
+        assertFalse("raw 'runecrafting' key must not leak through",
+                result.containsKey("runecrafting"));
+        assertEquals(Integer.valueOf(77), result.get("runecraft"));
+    }
+
+    @Test
+    public void testParseSkillRequirements_knownSkillsPassThrough() {
+        // Sanity check: every other OSRS skill name maps to a RuneLite enum
+        // value once lowercased, so no alias should be needed.
+        Map<String, Integer> result = TaskNormalizer.parseSkillRequirements(
+                "50 fishing 40 cooking 30 hitpoints 20 construction");
+        assertEquals(4, result.size());
+        assertTrue(result.containsKey("fishing"));
+        assertTrue(result.containsKey("cooking"));
+        assertTrue(result.containsKey("hitpoints"));
+        assertTrue(result.containsKey("construction"));
+    }
+
     // ------------------------------------------------------------------
     // normalizeDifficulty
     // ------------------------------------------------------------------
