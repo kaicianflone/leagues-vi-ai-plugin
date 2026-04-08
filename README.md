@@ -222,8 +222,8 @@ See `CLAUDE.md` for the full Phase 2 launch-day task list.
 
 ## License and attribution
 
-- **Plugin code:** author-original, license TBD (friends-only for now).
-- **Overlays ported from Quest Helper:** BSD-2-Clause. Original copyright preserved in each ported file's header comment block.
+- **Plugin code:** [MIT](LICENSE).
+- **Overlays ported from Quest Helper:** BSD-2-Clause. Original copyright preserved in each ported file's header comment block. See [ATTRIBUTIONS.md](ATTRIBUTIONS.md) for the list of ported files and the BSD-2-Clause text. These files keep their original license; MIT applies to everything else.
 - **LLM-generated contributions** are marked with `Co-Authored-By: Claude` in commit trailers per [Anthropic's attribution guidance](https://docs.anthropic.com).
 
 ---
