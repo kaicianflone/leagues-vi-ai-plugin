@@ -67,6 +67,22 @@ public class SqliteWriter {
                 ")"
             );
 
+            // Pacts table — phase 1 columns only. parent_id / unlock_requires
+            // are reserved for phase 2 (launch day 2026-04-15) when the unlock
+            // tree is documented. They default to NULL so older scrapers can
+            // coexist with newer readers.
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS pacts (" +
+                "  id              TEXT PRIMARY KEY," +
+                "  name            TEXT NOT NULL," +
+                "  node_type       TEXT," +
+                "  effect          TEXT," +
+                "  wiki_url        TEXT," +
+                "  parent_id       TEXT," +
+                "  unlock_requires TEXT" +
+                ")"
+            );
+
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS tasks (" +
                 "  id              TEXT PRIMARY KEY," +
@@ -190,6 +206,86 @@ public class SqliteWriter {
             } else {
                 ps.setNull(17, java.sql.Types.BLOB);
             }
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Upsert a relic row. Effects is stored as the flattened " / "-joined
+     * bullet string produced by {@code HtmlParser.flattenBullets}; this keeps
+     * the effects column a single TEXT value while preserving meaning.
+     */
+    public void upsertRelic(
+            String id,
+            String name,
+            int tier,
+            String description,
+            int unlockCost,
+            String effectsJsonOrText
+    ) throws SQLException {
+        String sql =
+            "INSERT OR REPLACE INTO relics " +
+            "(id, name, tier, description, unlock_cost, effects) " +
+            "VALUES (?, ?, ?, ?, ?, ?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, id);
+            ps.setString(2, name);
+            ps.setInt(3, tier);
+            ps.setString(4, description);
+            ps.setInt(5, unlockCost);
+            ps.setString(6, effectsJsonOrText);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Upsert an area row. {@code regionIdsJson} may be null. */
+    public void upsertArea(
+            String id,
+            String name,
+            int unlockCost,
+            String unlockRequiresJson,
+            String regionIdsJson
+    ) throws SQLException {
+        String sql =
+            "INSERT OR REPLACE INTO areas " +
+            "(id, name, unlock_cost, unlock_requires, region_ids) " +
+            "VALUES (?, ?, ?, ?, ?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, id);
+            ps.setString(2, name);
+            ps.setInt(3, unlockCost);
+            ps.setString(4, unlockRequiresJson);
+            ps.setString(5, regionIdsJson);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Upsert a pact row. Phase 1: {@code nodeType}, {@code parentId}, and
+     * {@code unlockRequiresJson} should be passed as null — the wiki does not
+     * yet document them.
+     */
+    public void upsertPact(
+            String id,
+            String name,
+            String nodeType,
+            String effect,
+            String wikiUrl,
+            String parentId,
+            String unlockRequiresJson
+    ) throws SQLException {
+        String sql =
+            "INSERT OR REPLACE INTO pacts " +
+            "(id, name, node_type, effect, wiki_url, parent_id, unlock_requires) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, id);
+            ps.setString(2, name);
+            ps.setString(3, nodeType);
+            ps.setString(4, effect);
+            ps.setString(5, wikiUrl);
+            ps.setString(6, parentId);
+            ps.setString(7, unlockRequiresJson);
             ps.executeUpdate();
         }
     }

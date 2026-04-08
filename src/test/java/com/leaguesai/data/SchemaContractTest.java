@@ -2,6 +2,7 @@ package com.leaguesai.data;
 
 import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import com.leaguesai.scraper.SqliteWriter;
@@ -324,6 +325,116 @@ public class SchemaContractTest {
         assertEquals(500, r.getUnlockCost());
         assertNotNull(r.getEffects());
         assertEquals(Boolean.FALSE, r.getEffects().get("resource_depletion"));
+    }
+
+    /**
+     * Phase 1 pacts round-trip via the dedicated upsertPact/loadPacts path.
+     * Verifies the new pacts table schema is created by SqliteWriter and
+     * parsed back by DatabaseLoader without loss.
+     */
+    @Test
+    public void pactsRoundTrip() throws Exception {
+        File dbFile = tmpFolder.newFile("pacts.db");
+        SqliteWriter writer = new SqliteWriter(dbFile);
+        writer.initialize();
+        writer.upsertPact("pact-aa", "AA", null,
+                "50% chance to Regenerate runes, ammo and charges",
+                "https://oldschool.runescape.wiki/w/Demonic_Pacts_League/Demonic_Pacts",
+                null, null);
+        writer.upsertPact("pact-b1", "B1", null,
+                "Magic level boosted by 1",
+                "https://oldschool.runescape.wiki/w/Demonic_Pacts_League/Demonic_Pacts",
+                null, null);
+        writer.close();
+
+        DatabaseLoader loader = new DatabaseLoader(dbFile);
+        List<Pact> pacts = loader.loadPacts();
+        assertEquals(2, pacts.size());
+
+        Map<String, Pact> byId = new LinkedHashMap<>();
+        for (Pact p : pacts) byId.put(p.getId(), p);
+
+        Pact aa = byId.get("pact-aa");
+        assertNotNull(aa);
+        assertEquals("AA", aa.getName());
+        assertNull("Phase 1: node_type must be null", aa.getNodeType());
+        assertTrue(aa.getEffect().contains("Regenerate runes"));
+        assertNull("Phase 1: parent_id reserved for phase 2", aa.getParentId());
+        assertNull("Phase 1: unlock_requires reserved for phase 2", aa.getUnlockRequires());
+
+        Pact b1 = byId.get("pact-b1");
+        assertNotNull(b1);
+        assertEquals("B1", b1.getName());
+    }
+
+    /**
+     * Regression: the phase-1 DemonicPactsScraper writes flattened bullet
+     * text into {@code relics.effects}, NOT JSON. Older loader code tried
+     * to parse that column as a JSON map and threw, skipping every relic
+     * after the first bad row. The loader must return the row with
+     * {@code effects == null} and keep loading the rest of the table.
+     */
+    @Test
+    public void loadRelics_plainTextEffectsColumnDoesNotNukeLoad() throws Exception {
+        File dbFile = tmpFolder.newFile("plaintext_effects.db");
+        SqliteWriter writer = new SqliteWriter(dbFile);
+        writer.initialize();
+        // Row 1: plain-text effects (phase 1 scraper output shape)
+        writer.upsertRelic("endless-harvest", "Endless Harvest", 1,
+                "Resources never deplete", 0,
+                "Resources gathered from Fishing, Woodcutting, and Mining are multiplied by 2");
+        // Row 2: also plain text, different tier
+        writer.upsertRelic("grimoire", "Grimoire", 6,
+                "Unlock all prayers and spells", 0,
+                "Unlock access to all prayers and spells regardless of requirements.");
+        // Row 3: valid JSON effects — must also survive
+        writer.upsertRelic("reloaded", "Reloaded", 7,
+                "Pick another relic below", 0,
+                "{\"pick_another\":true}");
+        writer.close();
+
+        DatabaseLoader loader = new DatabaseLoader(dbFile);
+        List<Relic> relics = loader.loadRelics();
+
+        assertEquals("All 3 rows load despite plain-text effects", 3, relics.size());
+
+        Map<String, Relic> byId = new LinkedHashMap<>();
+        for (Relic r : relics) byId.put(r.getId(), r);
+
+        Relic endless = byId.get("endless-harvest");
+        assertNotNull(endless);
+        assertEquals("Endless Harvest", endless.getName());
+        assertEquals(1, endless.getTier());
+        assertNull("Plain-text effects column decodes to null map", endless.getEffects());
+
+        Relic reloaded = byId.get("reloaded");
+        assertNotNull(reloaded);
+        assertNotNull("Valid JSON effects still parse", reloaded.getEffects());
+        assertEquals(Boolean.TRUE, reloaded.getEffects().get("pick_another"));
+    }
+
+    /**
+     * loadPacts() on an older DB that predates the pacts table must not
+     * throw — it should return an empty list instead. Simulated by writing
+     * tasks only (SqliteWriter.initialize does now create the pacts table,
+     * so we drop it manually to mimic an older scraper output).
+     */
+    @Test
+    public void loadPacts_missingTableReturnsEmpty() throws Exception {
+        File dbFile = tmpFolder.newFile("nopacts.db");
+        SqliteWriter writer = new SqliteWriter(dbFile);
+        writer.initialize();
+        writer.close();
+
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile.getAbsolutePath());
+             PreparedStatement ps = conn.prepareStatement("DROP TABLE pacts")) {
+            ps.executeUpdate();
+        }
+
+        DatabaseLoader loader = new DatabaseLoader(dbFile);
+        List<Pact> pacts = loader.loadPacts();
+        assertNotNull(pacts);
+        assertTrue("Missing table → empty list, not NPE", pacts.isEmpty());
     }
 
     /**

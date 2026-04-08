@@ -20,6 +20,15 @@ application {
     mainClass = 'com.leaguesai.scraper.WikiScraper'
 }
 
+// Phase 1 Leagues VI scraper — runs alongside the TBZ task scraper.
+// Populates relics, areas, and pacts tables.
+tasks.register('runPacts', JavaExec) {
+    group = 'application'
+    description = 'Scrape Demonic Pacts League relics/areas/pacts into the SQLite db'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.leaguesai.scraper.DemonicPactsScraper'
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release.set(11)

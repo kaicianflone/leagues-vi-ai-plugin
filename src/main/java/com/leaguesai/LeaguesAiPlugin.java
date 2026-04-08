@@ -5,6 +5,8 @@ import com.leaguesai.agent.*;
 import com.leaguesai.core.monitors.*;
 import com.leaguesai.data.*;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.Pact;
+import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import com.leaguesai.overlay.*;
 import com.leaguesai.ui.*;
@@ -72,6 +74,7 @@ public class LeaguesAiPlugin extends Plugin {
 
     // Services constructed at runtime (need config/loaded data)
     private volatile TaskRepositoryImpl taskRepo;
+    private volatile GoalStore goalStore;
     private volatile VectorIndex vectorIndex;
     private volatile LlmClient openAiClient;
     private volatile ChatService chatService;
@@ -158,9 +161,14 @@ public class LeaguesAiPlugin extends Plugin {
             DatabaseLoader loader = new DatabaseLoader(dbFile);
             List<Task> tasks = loader.loadTasks();
             List<Area> areas = loader.loadAreas();
+            List<Relic> relics = loader.loadRelics();
+            List<Pact> pacts = loader.loadPacts();
             Map<String, float[]> embeddings = loader.loadEmbeddings();
 
-            taskRepo = new TaskRepositoryImpl(tasks, areas);
+            taskRepo = new TaskRepositoryImpl(tasks, areas, relics, pacts);
+            File goalsFile = new File(System.getProperty("user.home"),
+                ".runelite/leagues-ai/data/goals.json");
+            goalStore = new GoalStore(goalsFile);
             vectorIndex = new VectorIndex(embeddings);
             goalPlanner = new GoalPlanner(taskRepo);
 
@@ -212,7 +220,16 @@ public class LeaguesAiPlugin extends Plugin {
                 }
             });
 
-            log.info("Leagues AI: loaded {} tasks, {} areas", tasks.size(), areas.size());
+            log.info("Leagues AI: loaded {} tasks, {} areas, {} relics, {} pacts",
+                    tasks.size(), areas.size(), relics.size(), pacts.size());
+
+            // Build + mount the unlockables goal picker now that repo is ready.
+            final GoalStore gs = goalStore;
+            SwingUtilities.invokeLater(() -> {
+                UnlockablesPanel unlock = new UnlockablesPanel(taskRepo, gs);
+                unlock.setOnSetGoal(this::handleUnlockableGoalClick);
+                panel.getGoalsPanel().setUnlockablesPanel(unlock);
+            });
 
             SwingUtilities.invokeLater(() -> {
                 if (tasks.isEmpty()) {
@@ -306,6 +323,42 @@ public class LeaguesAiPlugin extends Plugin {
                     panel.setPreAuthButtonText("Sign in with ChatGPT");
                     panel.setPreAuthButtonEnabled(true);
                     panel.getChatPanel().showError("Failed to launch Codex login: " + e.getMessage());
+                });
+            }
+        });
+    }
+
+    /**
+     * Handle a "Set as goal" click from the UnlockablesPanel. The panel
+     * hands us a planner-ready phrase starting with "plan ..."; we send it
+     * through {@code chatService.sendMessage} on the LLM executor so the
+     * planner fires and the chat panel shows the response. Runs async so
+     * the click doesn't block the EDT.
+     */
+    private void handleUnlockableGoalClick(String goalPhrase) {
+        if (goalPhrase == null || goalPhrase.isEmpty()) return;
+        if (chatService == null) {
+            SwingUtilities.invokeLater(() ->
+                panel.getChatPanel().showError("Database not loaded yet. Wait a moment."));
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            panel.getChatPanel().appendMessage("You", goalPhrase);
+            panel.getChatPanel().setLoading(true);
+            panel.switchToChatTab();
+        });
+        llmExecutor.submit(() -> {
+            try {
+                String response = chatService.sendMessage(goalPhrase);
+                SwingUtilities.invokeLater(() -> {
+                    panel.getChatPanel().appendMessage("AI", response);
+                    panel.getChatPanel().setLoading(false);
+                });
+            } catch (Exception e) {
+                log.error("Unlockable goal chat error", e);
+                SwingUtilities.invokeLater(() -> {
+                    panel.getChatPanel().showError(e.getMessage());
+                    panel.getChatPanel().setLoading(false);
                 });
             }
         });

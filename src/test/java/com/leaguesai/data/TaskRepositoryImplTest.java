@@ -2,6 +2,8 @@ package com.leaguesai.data;
 
 import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.Pact;
+import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import org.junit.Before;
 import org.junit.Test;
@@ -253,6 +255,82 @@ public class TaskRepositoryImplTest {
     @Test
     public void getAreaByRegionId_notFound_returnsNull() {
         assertNull(repo.getAreaByRegionId(99999));
+    }
+
+    // --- Phase 1 (Leagues VI): relics + pacts ---
+
+    @Test
+    public void legacy2ArgConstructor_returnsEmptyRelicsAndPacts() {
+        // The original constructor signature must still work for any callers
+        // that haven't been updated to pass relics/pacts yet.
+        TaskRepositoryImpl legacy = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList());
+        assertNotNull(legacy.getAllRelics());
+        assertNotNull(legacy.getAllPacts());
+        assertTrue(legacy.getAllRelics().isEmpty());
+        assertTrue(legacy.getAllPacts().isEmpty());
+    }
+
+    @Test
+    public void getAllRelics_preservesInsertionOrder() {
+        List<Relic> relics = Arrays.asList(
+                Relic.builder().id("r1").name("Endless Harvest").tier(1).build(),
+                Relic.builder().id("r6").name("Grimoire").tier(6).build(),
+                Relic.builder().id("r8").name("Minion").tier(8).build());
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList(),
+                relics,
+                Collections.<Pact>emptyList());
+
+        List<Relic> out = r.getAllRelics();
+        assertEquals(3, out.size());
+        assertEquals("Endless Harvest", out.get(0).getName());
+        assertEquals("Grimoire", out.get(1).getName());
+        assertEquals("Minion", out.get(2).getName());
+    }
+
+    @Test
+    public void getAllPacts_nodeTypeMayBeNullInPhase1() {
+        List<Pact> pacts = Arrays.asList(
+                Pact.builder().id("pact-aa").name("AA").nodeType(null).effect("regen").build(),
+                Pact.builder().id("pact-b1").name("B1").nodeType(null).effect("boost").build());
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList(),
+                Collections.<Relic>emptyList(),
+                pacts);
+
+        List<Pact> out = r.getAllPacts();
+        assertEquals(2, out.size());
+        assertNull("Phase 1 leaves node_type null until wiki documents tree",
+                out.get(0).getNodeType());
+    }
+
+    @Test
+    public void constructor_handlesNullRelicsAndPacts() {
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList(),
+                null,
+                null);
+        assertTrue(r.getAllRelics().isEmpty());
+        assertTrue(r.getAllPacts().isEmpty());
+    }
+
+    @Test
+    public void constructor_skipsRelicWithNullId() {
+        List<Relic> relics = Arrays.asList(
+                Relic.builder().id("r1").name("Good").tier(1).build(),
+                Relic.builder().id(null).name("Bad").tier(1).build());
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList(),
+                relics,
+                Collections.<Pact>emptyList());
+
+        assertEquals("Null-id relic dropped", 1, r.getAllRelics().size());
     }
 
     // --- Cycle safety test: task with self-referencing prereq ---

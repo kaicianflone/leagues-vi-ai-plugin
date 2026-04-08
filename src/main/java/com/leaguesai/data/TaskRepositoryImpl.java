@@ -2,12 +2,15 @@ package com.leaguesai.data;
 
 import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.Pact;
+import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -19,8 +22,19 @@ public class TaskRepositoryImpl implements TaskRepository {
 
     private final Map<String, Task> tasksById;
     private final Map<String, Area> areasById;
+    private final Map<String, Relic> relicsById;
+    private final Map<String, Pact> pactsById;
 
+    /**
+     * Back-compat constructor — no relics/pacts. Prefer the 4-arg overload
+     * in new code so relic/pact goal-picker UI has data to render.
+     */
     public TaskRepositoryImpl(List<Task> tasks, List<Area> areas) {
+        this(tasks, areas, Collections.emptyList(), Collections.emptyList());
+    }
+
+    public TaskRepositoryImpl(List<Task> tasks, List<Area> areas,
+                              List<Relic> relics, List<Pact> pacts) {
         tasksById = new HashMap<>();
         for (Task task : tasks) {
             tasksById.put(task.getId(), task);
@@ -29,6 +43,26 @@ public class TaskRepositoryImpl implements TaskRepository {
         areasById = new HashMap<>();
         for (Area area : areas) {
             areasById.put(area.getId(), area);
+        }
+
+        // LinkedHashMap preserves scraper insertion order so the UI can
+        // render relics in wiki-declared tier order without re-sorting.
+        relicsById = new LinkedHashMap<>();
+        if (relics != null) {
+            for (Relic r : relics) {
+                if (r != null && r.getId() != null) {
+                    relicsById.put(r.getId(), r);
+                }
+            }
+        }
+
+        pactsById = new LinkedHashMap<>();
+        if (pacts != null) {
+            for (Pact p : pacts) {
+                if (p != null && p.getId() != null) {
+                    pactsById.put(p.getId(), p);
+                }
+            }
         }
     }
 
@@ -126,5 +160,15 @@ public class TaskRepositoryImpl implements TaskRepository {
             }
         }
         return null;
+    }
+
+    @Override
+    public List<Relic> getAllRelics() {
+        return new ArrayList<>(relicsById.values());
+    }
+
+    @Override
+    public List<Pact> getAllPacts() {
+        return new ArrayList<>(pactsById.values());
     }
 }

@@ -4,9 +4,11 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
 import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
 import net.runelite.api.coords.WorldPoint;
@@ -63,7 +65,7 @@ public class DatabaseLoader {
         return tasks;
     }
 
-    /** Load all rows from the {@code areas} table. */
+    /** Load all rows from the {@code areas} table. Per-row try/catch. */
     public List<Area> loadAreas() {
         if (!dbFile.exists()) {
             return Collections.emptyList();
@@ -74,15 +76,22 @@ public class DatabaseLoader {
              ResultSet rs = stmt.executeQuery("SELECT * FROM areas")) {
 
             while (rs.next()) {
-                areas.add(parseArea(rs));
+                try {
+                    areas.add(parseArea(rs));
+                } catch (Exception rowErr) {
+                    // Skip bad row, keep loading.
+                }
             }
         } catch (Exception e) {
-            // Return whatever was collected.
+            // Table missing — return whatever was collected.
         }
         return areas;
     }
 
-    /** Load all rows from the {@code relics} table. */
+    /**
+     * Load all rows from the {@code relics} table. Per-row try/catch so a
+     * single malformed row cannot abort the whole load.
+     */
     public List<Relic> loadRelics() {
         if (!dbFile.exists()) {
             return Collections.emptyList();
@@ -93,12 +102,43 @@ public class DatabaseLoader {
              ResultSet rs = stmt.executeQuery("SELECT * FROM relics")) {
 
             while (rs.next()) {
-                relics.add(parseRelic(rs));
+                try {
+                    relics.add(parseRelic(rs));
+                } catch (Exception rowErr) {
+                    // Skip bad row, keep loading.
+                }
             }
         } catch (Exception e) {
-            // Return whatever was collected.
+            // Table missing or connection failure — return whatever collected.
         }
         return relics;
+    }
+
+    /**
+     * Load all rows from the {@code pacts} table. Returns an empty list if
+     * the table does not exist yet (older DBs from before the pacts scraper
+     * shipped) or if the db file is missing.
+     */
+    public List<Pact> loadPacts() {
+        if (!dbFile.exists()) {
+            return Collections.emptyList();
+        }
+        List<Pact> pacts = new ArrayList<>();
+        try (Connection conn = openConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM pacts")) {
+
+            while (rs.next()) {
+                try {
+                    pacts.add(parsePact(rs));
+                } catch (Exception rowErr) {
+                    // Skip bad row, keep loading.
+                }
+            }
+        } catch (Exception e) {
+            // Table may not exist on older DBs — return whatever was collected.
+        }
+        return pacts;
     }
 
     /**
@@ -181,6 +221,18 @@ public class DatabaseLoader {
                 .build();
     }
 
+    private Pact parsePact(ResultSet rs) throws Exception {
+        return Pact.builder()
+                .id(rs.getString("id"))
+                .name(rs.getString("name"))
+                .nodeType(rs.getString("node_type"))
+                .effect(rs.getString("effect"))
+                .wikiUrl(rs.getString("wiki_url"))
+                .parentId(rs.getString("parent_id"))
+                .unlockRequires(parseStringList(rs.getString("unlock_requires")))
+                .build();
+    }
+
     // -------------------------------------------------------------------------
     // JSON helpers
     // -------------------------------------------------------------------------
@@ -194,13 +246,23 @@ public class DatabaseLoader {
         return GSON.fromJson(json, type);
     }
 
-    /** Parse a JSON object like {@code {"key":"value"}} into Map<String,Object>. */
+    /**
+     * Parse a JSON object like {@code {"key":"value"}} into Map<String,Object>.
+     * Returns null if the column is empty OR if the value is not valid JSON
+     * (phase 1 DemonicPactsScraper writes flattened bullet text into the
+     * relics.effects column, which is plain text, not JSON). One bad row
+     * must not prevent the rest of the table from loading.
+     */
     private Map<String, Object> parseStringObjectMap(String json) {
         if (json == null || json.isEmpty()) {
             return null;
         }
-        Type type = new TypeToken<Map<String, Object>>() {}.getType();
-        return GSON.fromJson(json, type);
+        try {
+            Type type = new TypeToken<Map<String, Object>>() {}.getType();
+            return GSON.fromJson(json, type);
+        } catch (JsonSyntaxException e) {
+            return null;
+        }
     }
 
     /** Parse a JSON string array into List<String>. */

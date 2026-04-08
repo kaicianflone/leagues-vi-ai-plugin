@@ -79,6 +79,54 @@ When the overlay chain doesn't fire, check:
 3. Is the overlay actually rendering? Look for the overlay's `DEBUG` log lines (e.g., `MINIMAP DEBUG target=... branch=...`).
 4. If render is firing but nothing shows, the branch taken will tell you where the rendering pipeline is bailing.
 
+## Phase 2 TODO — Leagues VI launch day (2026-04-15)
+
+The Demonic Pacts League wiki was incomplete when the Phase 1 goal picker
+(`UnlockablesPanel` + `DemonicPactsScraper`) shipped. On launch day the
+following items need to be scraped / wired in. **Do NOT hallucinate filter
+names or taxonomy — always read the live wiki first.**
+
+- **Tasks scraping:** swap `WikiScraper.TASK_PAGES` from
+  `Trailblazer_Reloaded_League/Tasks` to
+  `Demonic_Pacts_League/Tasks`. Re-run `./scraper/scrape.sh`. Verify row
+  count > 0.
+- **Task filter taxonomy:** the live Tasks page will expose filter UI with
+  data attributes (likely `data-area-for-filtering`, `data-difficulty`,
+  `data-category`, etc.). Read the page source, capture the exact attribute
+  names, and thread them through `HtmlParser.parseTaskTableRich` →
+  `SqliteWriter.upsertTaskWithId`'s `category` column (or a new
+  `categories` JSON column if multiple apply per task). Then build the task
+  filter UI in `GoalsPanel` mirroring the in-game filters verbatim.
+- **Required items + skill requirements per task:** `HtmlParser.TaskRow`
+  currently drops these. Parse the requirements column through
+  `TaskNormalizer.parseSkillRequirements` (already exists) and a new
+  item-requirements parser. Write both into `tasks.items_required` and
+  `tasks.skills_required`.
+- **Area unlock costs:** the Areas page will eventually list point costs
+  per region. Update `HtmlParser.parseAreasPage` to capture them and write
+  into `areas.unlock_cost`. The `UnlockablesPanel` already renders
+  `"cost TBD"` when the value is 0 — it will pick up real numbers
+  automatically.
+- **Pact unlock tree:** if the wiki adds a tree / skill-tree graph for
+  pacts, extend `HtmlParser.parsePactsPage` to capture parent relationships
+  and populate `pacts.parent_id` + `pacts.unlock_requires`. `Pact` and the
+  `pacts` SQLite table already reserve those columns. Then upgrade the
+  pact section of `UnlockablesPanel` from a flat list to a tree view.
+- **In-game unlock detection:** `GoalStore.isUnlocked(id)` is hardcoded
+  false for everything in phase 1. Hook it into a `LeagueStatusMonitor`
+  (new) that watches the relevant varbits / config events for relic + area
+  + pact unlock state and calls `GoalStore.markUnlocked(...)`.
+- **Auto-completed quest list:** the wiki's Overview page lists quests
+  that are auto-completed in Leagues VI. Not currently used anywhere, but
+  `contextAssembler` may want to know which quest prereqs are satisfied by
+  default so the planner doesn't route the player through them.
+
+Phase 1 files that Phase 2 will most likely touch:
+`scraper/src/main/java/com/leaguesai/scraper/HtmlParser.java`,
+`scraper/src/main/java/com/leaguesai/scraper/WikiScraper.java`,
+`src/main/java/com/leaguesai/ui/UnlockablesPanel.java`,
+`src/main/java/com/leaguesai/ui/GoalsPanel.java`.
+
 ## Where to look when something breaks
 
 - **Plugin doesn't start:** check Guice injection errors in the RuneLite log. Most commonly caused by a missing `@Singleton` or a service that depends on `TaskRepository` (which is built manually, not Guice-injected).

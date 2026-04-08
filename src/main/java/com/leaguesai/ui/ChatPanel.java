@@ -62,8 +62,10 @@ public class ChatPanel extends JPanel {
         toolbar.setBackground(BACKGROUND_COLOR);
         toolbar.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
 
-        goalsLinkButton = new JButton("\uD83C\uDFAF Goals");
-        goalsLinkButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        // Plain text — emojis like 🎯 don't render in Swing's default font on
+        // macOS and break the button's preferred size, clipping the label.
+        goalsLinkButton = new JButton("Goals \u2192");
+        goalsLinkButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 10));
         goalsLinkButton.setBackground(new Color(55, 55, 55));
         goalsLinkButton.setForeground(new Color(120, 170, 240));
         goalsLinkButton.setFocusPainted(false);
@@ -308,10 +310,26 @@ public class ChatPanel extends JPanel {
         });
     }
 
-    /** Heartbeat label setter — driven by HeartbeatTicker. EDT-safe. */
+    /**
+     * Heartbeat label setter — driven by HeartbeatTicker. EDT-safe.
+     *
+     * <p>The side panel is only ~210px wide so plain text like
+     * "Looking good, take a quick break?" gets clipped on the right.
+     * Wrap in HTML with an explicit width hint so JLabel word-wraps and
+     * its preferredSize reflows to fit multi-line content.
+     */
     public void setHeartbeatText(String text) {
-        SwingUtilities.invokeLater(() ->
-                heartbeatLabel.setText(text == null || text.isEmpty() ? " " : text));
+        SwingUtilities.invokeLater(() -> {
+            if (text == null || text.isEmpty()) {
+                heartbeatLabel.setText(" ");
+            } else {
+                String safe = text.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;");
+                heartbeatLabel.setText("<html><div style='width:195px'>" + safe + "</div></html>");
+            }
+            heartbeatLabel.revalidate();
+        });
     }
 
     /** Wire the "Goals" link in the toolbar. */
