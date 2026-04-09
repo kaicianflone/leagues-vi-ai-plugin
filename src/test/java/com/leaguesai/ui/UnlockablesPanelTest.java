@@ -127,6 +127,95 @@ public class UnlockablesPanelTest {
         assertNotNull("Unlocked badge present when unlocked=true", badge2);
     }
 
+    // ----- Phase 2 PR 3: pact select / respec flow ----------------------
+
+    private UnlockablesPanel panelWithOnePact(Pact p) throws Exception {
+        TaskRepository repo = new TaskRepositoryImpl(
+                Collections.<Task>emptyList(),
+                Collections.<Area>emptyList(),
+                Collections.<Relic>emptyList(),
+                Collections.singletonList(p));
+        AtomicReference<UnlockablesPanel> ref = new AtomicReference<>();
+        runOnEdt(() -> ref.set(new UnlockablesPanel(repo, goalStore)));
+        runOnEdt(() -> {});
+        return ref.get();
+    }
+
+    @Test
+    public void pactRow_selectClickWritesToGoalStore() throws Exception {
+        Pact aa = Pact.builder().id("pact-aa").name("AA").effect("Regen runes").build();
+        UnlockablesPanel panel = panelWithOnePact(aa);
+
+        javax.swing.JPanel row = panel.buildPactRow(aa);
+        javax.swing.JLabel select = findLabelByText(row, "Select");
+        assertNotNull("Select toggle present when budget has room", select);
+
+        select.getMouseListeners()[0].mouseClicked(new java.awt.event.MouseEvent(
+                select, java.awt.event.MouseEvent.MOUSE_CLICKED,
+                System.currentTimeMillis(), 0, 0, 0, 1, false));
+
+        assertTrue("Click must write to GoalStore", goalStore.isPactSelected("pact-aa"));
+        assertEquals(1, goalStore.getSelectedPactCount());
+    }
+
+    @Test
+    public void pactRow_selectedStateShowsChecked() throws Exception {
+        Pact aa = Pact.builder().id("pact-aa").name("AA").effect("Regen runes").build();
+        goalStore.selectPact("pact-aa");
+        UnlockablesPanel panel = panelWithOnePact(aa);
+
+        javax.swing.JPanel row = panel.buildPactRow(aa);
+        javax.swing.JLabel selected = findLabelByText(row, "Selected \u2713");
+        assertNotNull("Row should show 'Selected' state when pact is in GoalStore", selected);
+
+        // Clicking Selected should deselect.
+        selected.getMouseListeners()[0].mouseClicked(new java.awt.event.MouseEvent(
+                selected, java.awt.event.MouseEvent.MOUSE_CLICKED,
+                System.currentTimeMillis(), 0, 0, 0, 1, false));
+        assertFalse("Click on Selected must deselect", goalStore.isPactSelected("pact-aa"));
+    }
+
+    @Test
+    public void pactRow_budgetFullDisablesUnselectedRows() throws Exception {
+        // Fill the budget.
+        for (int i = 0; i < com.leaguesai.data.GoalStore.MAX_PACT_SLOTS; i++) {
+            goalStore.selectPact("pact-filler-" + i);
+        }
+        assertFalse(goalStore.canSelectAnotherPact());
+
+        Pact extra = Pact.builder().id("pact-extra").name("Extra").effect("").build();
+        UnlockablesPanel panel = panelWithOnePact(extra);
+
+        javax.swing.JPanel row = panel.buildPactRow(extra);
+        // Disabled state renders as "budget full" label, no click listener.
+        javax.swing.JLabel full = findLabelByText(row, "budget full");
+        assertNotNull("Budget-full disabled state present", full);
+        assertEquals("No click listener on disabled toggle",
+                0, full.getMouseListeners().length);
+    }
+
+    @Test
+    public void pactRow_parentPrereqDisablesChild() throws Exception {
+        Pact child = Pact.builder()
+                .id("pact-child")
+                .name("Child")
+                .effect("")
+                .parentId("pact-parent")
+                .build();
+        UnlockablesPanel panel = panelWithOnePact(child);
+
+        javax.swing.JPanel row = panel.buildPactRow(child);
+        javax.swing.JLabel requires = findLabelByText(row, "requires parent");
+        assertNotNull("Child pact with unmet parent shows disabled 'requires parent' state",
+                requires);
+
+        // After parent is selected, the child becomes selectable on the next build.
+        goalStore.selectPact("pact-parent");
+        javax.swing.JPanel row2 = panel.buildPactRow(child);
+        javax.swing.JLabel select = findLabelByText(row2, "Select");
+        assertNotNull("Child becomes selectable once parent is selected", select);
+    }
+
     private javax.swing.JLabel findLabelByText(java.awt.Container container, String text) {
         for (java.awt.Component c : container.getComponents()) {
             if (c instanceof javax.swing.JLabel) {

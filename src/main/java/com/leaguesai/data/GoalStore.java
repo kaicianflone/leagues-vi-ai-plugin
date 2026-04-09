@@ -15,20 +15,33 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * Persists which relics / areas / pacts the user has pinned as goals, plus
- * which are unlocked. Separate from the SQLite read model (which holds wiki
- * data, not user state).
+ * Persists which relics / areas / pacts the user has pinned as goals, which
+ * are unlocked, and (Phase 2) which pacts the user has actively selected for
+ * their 40-slot Leagues VI pact allocation. Separate from the SQLite read
+ * model (which holds wiki data, not user state).
  *
  * <p>Backed by a small JSON file at
  * {@code ~/.runelite/leagues-ai/data/goals.json}. Writes go through a
  * temp-file-and-rename dance so a crash mid-write can't leave a truncated
  * file on disk.
  *
- * <p>Phase 1: {@link #isUnlocked(String)} always returns {@code false} for
- * ids that haven't been explicitly marked. Phase 2 will hook this into
- * in-game events.
+ * <p>Phase 2 pact allocation model: Leagues VI lets the player pick up to
+ * {@link #MAX_PACT_SLOTS} pacts during the league, with {@link #MAX_RESPECS}
+ * full resets available if they want to reshuffle. This class tracks the
+ * current selection set + the respec counter and exposes idempotent methods
+ * for the UI to drive. See {@code UnlockablesPanel.buildPactsSection} for
+ * the UI side.
+ *
+ * <p>{@link #isUnlocked(String)} returns {@code false} for ids that haven't
+ * been explicitly marked. Auto-detection from in-game events is a
+ * post-launch task tracked in {@code CLAUDE.md}.
  */
 public class GoalStore {
+
+    /** Hard cap on simultaneous pact selections per the Demonic Pacts League rules. */
+    public static final int MAX_PACT_SLOTS = 40;
+    /** Number of full resets the player gets during the league. */
+    public static final int MAX_RESPECS = 3;
 
     private static final Gson GSON = new Gson();
 
@@ -41,7 +54,7 @@ public class GoalStore {
     }
 
     // -------------------------------------------------------------------------
-    // Public API
+    // Pin-a-goal API (relic / area / pact targets the planner should care about)
     // -------------------------------------------------------------------------
 
     public synchronized Set<String> getRelicGoals() {
@@ -108,6 +121,80 @@ public class GoalStore {
     }
 
     // -------------------------------------------------------------------------
+    // Pact allocation API (Phase 2 — 40 slots + 3 respecs)
+    // -------------------------------------------------------------------------
+
+    /** Pacts the player has actively selected for their current allocation. */
+    public synchronized Set<String> getSelectedPacts() {
+        return Collections.unmodifiableSet(state.selectedPactIds);
+    }
+
+    /** Number of pacts currently selected. Always {@code <= MAX_PACT_SLOTS}. */
+    public synchronized int getSelectedPactCount() {
+        return state.selectedPactIds.size();
+    }
+
+    public synchronized boolean isPactSelected(String id) {
+        return id != null && state.selectedPactIds.contains(id);
+    }
+
+    /**
+     * {@code true} when the player has room in their {@link #MAX_PACT_SLOTS}
+     * budget to pick another pact. A pact that is already selected does NOT
+     * count against this — the caller should allow deselection even at the cap.
+     */
+    public synchronized boolean canSelectAnotherPact() {
+        return state.selectedPactIds.size() < MAX_PACT_SLOTS;
+    }
+
+    /**
+     * Add a pact to the active selection. No-op if the id is already selected
+     * or the budget is full. Returns {@code true} if the selection changed.
+     */
+    public synchronized boolean selectPact(String id) {
+        if (id == null || id.isEmpty()) return false;
+        if (state.selectedPactIds.contains(id)) return false;
+        if (!canSelectAnotherPact()) return false;
+        state.selectedPactIds.add(id);
+        save();
+        return true;
+    }
+
+    /** Remove a pact from the active selection. Returns {@code true} if changed. */
+    public synchronized boolean deselectPact(String id) {
+        if (id == null || id.isEmpty()) return false;
+        if (!state.selectedPactIds.remove(id)) return false;
+        save();
+        return true;
+    }
+
+    public synchronized int getRespecsUsed() {
+        return state.respecsUsed;
+    }
+
+    public synchronized int getRespecsRemaining() {
+        return Math.max(0, MAX_RESPECS - state.respecsUsed);
+    }
+
+    public synchronized boolean canRespec() {
+        return state.respecsUsed < MAX_RESPECS;
+    }
+
+    /**
+     * Clear the entire pact selection and burn one respec. Returns {@code true}
+     * if the respec was applied; {@code false} if the player has already used
+     * all {@link #MAX_RESPECS} resets. The UI should show a confirmation
+     * dialog BEFORE calling this.
+     */
+    public synchronized boolean resetPacts() {
+        if (!canRespec()) return false;
+        state.selectedPactIds.clear();
+        state.respecsUsed++;
+        save();
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
     // Persistence
     // -------------------------------------------------------------------------
 
@@ -153,11 +240,19 @@ public class GoalStore {
         Set<String> pactGoals = new LinkedHashSet<>();
         Set<String> unlocked = new LinkedHashSet<>();
 
+        // Phase 2 additions. Old goals.json files written before these fields
+        // existed will deserialize with null here and get defaulted by
+        // ensureInitialized() — no explicit migration step required.
+        Set<String> selectedPactIds = new LinkedHashSet<>();
+        int respecsUsed = 0;
+
         State ensureInitialized() {
             if (relicGoals == null) relicGoals = new LinkedHashSet<>();
             if (areaGoals == null) areaGoals = new LinkedHashSet<>();
             if (pactGoals == null) pactGoals = new LinkedHashSet<>();
             if (unlocked == null) unlocked = new LinkedHashSet<>();
+            if (selectedPactIds == null) selectedPactIds = new LinkedHashSet<>();
+            // respecsUsed is a primitive int — Gson defaults it to 0 for missing fields.
             return this;
         }
     }

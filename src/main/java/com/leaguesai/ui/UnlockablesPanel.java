@@ -10,6 +10,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -22,6 +23,7 @@ import java.awt.Font;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,6 +63,9 @@ public class UnlockablesPanel extends JPanel {
     private static final Color LOCKED_FG = new Color(200, 100, 100);
     private static final Color UNLOCKED_FG = new Color(120, 200, 120);
     private static final Color BUTTON_FG = new Color(120, 170, 240);
+    private static final Color BUTTON_DISABLED_FG = new Color(80, 80, 90);
+    private static final Color SELECTED_FG = new Color(120, 200, 120);
+    private static final Color RESPEC_FG = new Color(240, 170, 120);
     private static final Color BORDER = new Color(60, 60, 60);
 
     // Wiki editorial split — Varlamore and Karamja are the two universal
@@ -73,6 +78,13 @@ public class UnlockablesPanel extends JPanel {
     private final GoalStore goalStore;
 
     private Consumer<String> onSetGoal;
+
+    /**
+     * Tracks which collapsible sections were open before the last rebuild so
+     * selecting a pact doesn't snap the whole section shut. Keyed by the
+     * first word of the section title ("Relics", "Areas", "Demonic").
+     */
+    private final Map<String, Boolean> sectionExpanded = new HashMap<>();
 
     public UnlockablesPanel(TaskRepository repo, GoalStore goalStore) {
         this.repo = repo;
@@ -195,15 +207,113 @@ public class UnlockablesPanel extends JPanel {
     private JPanel buildPactsSection() {
         List<Pact> pacts = repo != null ? repo.getAllPacts() : java.util.Collections.emptyList();
 
+        int selected = goalStore != null ? goalStore.getSelectedPactCount() : 0;
+        int remainingRespecs = goalStore != null ? goalStore.getRespecsRemaining() : GoalStore.MAX_RESPECS;
+
         JPanel child = newChildColumn();
+
+        // Group by nodeType (Minor/Major/Master) if the scraper captured
+        // tiers on launch day. Otherwise render flat. Phase 1 data has
+        // nodeType=null for everything so we fall through to flat.
+        boolean hasTiers = false;
         for (Pact p : pacts) {
-            child.add(buildPactRow(p));
-        }
-        if (pacts.isEmpty()) {
-            child.add(emptyLabel("No pacts loaded — run scraper."));
+            if (p != null && p.getNodeType() != null && !p.getNodeType().isEmpty()) {
+                hasTiers = true;
+                break;
+            }
         }
 
-        return buildCollapsible("Demonic Pacts (" + pacts.size() + ")", child);
+        if (hasTiers) {
+            Map<String, JPanel> tierGroups = new LinkedHashMap<>();
+            tierGroups.put("Minor", newGroupPanel("Minor"));
+            tierGroups.put("Major", newGroupPanel("Major"));
+            tierGroups.put("Master", newGroupPanel("Master"));
+            for (Pact p : pacts) {
+                String tier = p.getNodeType() != null ? capitalize(p.getNodeType()) : "Minor";
+                JPanel grp = tierGroups.computeIfAbsent(tier, t -> newGroupPanel(t));
+                grp.add(buildPactRow(p));
+            }
+            for (JPanel grp : tierGroups.values()) {
+                // Skip tier groups that only contain the header label — no
+                // empty "Master" bucket when the scraper didn't capture any.
+                if (grp.getComponentCount() > 1) {
+                    child.add(grp);
+                    child.add(leftAlignedStrut(2));
+                }
+            }
+        } else {
+            for (Pact p : pacts) {
+                child.add(buildPactRow(p));
+            }
+        }
+
+        if (pacts.isEmpty()) {
+            child.add(emptyLabel("No pacts loaded — run scraper."));
+        } else {
+            // Footer row: Respec button with confirmation. Disabled if the
+            // player has already used all 3 respecs.
+            child.add(leftAlignedStrut(4));
+            child.add(buildRespecFooter(remainingRespecs));
+        }
+
+        String title = "Demonic Pacts ("
+                + selected + "/" + GoalStore.MAX_PACT_SLOTS
+                + " \u2022 respecs: " + remainingRespecs + ")";
+        return buildCollapsible(title, child);
+    }
+
+    private static String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1).toLowerCase();
+    }
+
+    /**
+     * Footer row inside the pacts section — a single "Respec" button that
+     * wipes the active pact selection and burns one of the player's three
+     * resets. Shows a JOptionPane confirmation before committing.
+     */
+    private JPanel buildRespecFooter(int remainingRespecs) {
+        JPanel footer = new JPanel(new BorderLayout(4, 0));
+        footer.setBackground(ROW_BG);
+        footer.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, BORDER),
+                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
+        footer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        footer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+
+        boolean canRespec = goalStore != null && goalStore.canRespec();
+        String labelText = canRespec
+                ? "Respec (" + remainingRespecs + " left)"
+                : "Respec (none left)";
+
+        JLabel respecLink = new JLabel(labelText, SwingConstants.CENTER);
+        respecLink.setForeground(canRespec ? RESPEC_FG : BUTTON_DISABLED_FG);
+        respecLink.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+        respecLink.setHorizontalAlignment(SwingConstants.CENTER);
+        if (canRespec) {
+            respecLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            respecLink.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    int selected = goalStore.getSelectedPactCount();
+                    int willRemain = goalStore.getRespecsRemaining() - 1;
+                    int choice = JOptionPane.showConfirmDialog(
+                            UnlockablesPanel.this,
+                            "Clear all " + selected + " pact selections?\n"
+                                    + "You will have " + willRemain + " respecs remaining after this.",
+                            "Respec pacts",
+                            JOptionPane.OK_CANCEL_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+                    if (choice == JOptionPane.OK_OPTION) {
+                        goalStore.resetPacts();
+                        sectionExpanded.put("Demonic", Boolean.TRUE);
+                        rebuild();
+                    }
+                }
+            });
+        }
+        footer.add(respecLink, BorderLayout.CENTER);
+        return footer;
     }
 
     /**
@@ -242,13 +352,115 @@ public class UnlockablesPanel extends JPanel {
         return makeRow(a.getName(), costMeta, unlocked, goalPhrase);
     }
 
-    private JPanel buildPactRow(Pact p) {
-        String id = p.getId();
-        boolean unlocked = goalStore != null && goalStore.isUnlocked(id);
-        String label = "Pact " + p.getName();
-        String goalPhrase = "plan unlock pact " + p.getName();
-        // Full effect text — wraps in HTML.
-        return makeRow(label, p.getEffect() != null ? p.getEffect() : "", unlocked, goalPhrase);
+    /**
+     * Pact row differs from relics/areas: the right column holds a
+     * select/deselect toggle that writes directly to {@link GoalStore} and
+     * triggers a rebuild so the budget header + disabled state update. The
+     * "Set as goal" path is available via a small secondary link below the
+     * toggle so users can still route a pact through the composite planner.
+     *
+     * <p>Package-private so {@code UnlockablesPanelTest} can drive the
+     * select/deselect click flow without realising the whole panel on screen.
+     */
+    JPanel buildPactRow(Pact p) {
+        final String id = p.getId();
+        final boolean selected = goalStore != null && goalStore.isPactSelected(id);
+        final boolean budgetFull = goalStore != null && !goalStore.canSelectAnotherPact();
+        final boolean hasParent = p.getParentId() != null && !p.getParentId().isEmpty();
+        final boolean parentSelected = !hasParent
+                || (goalStore != null && goalStore.isPactSelected(p.getParentId()));
+        final boolean enabled = selected || (!budgetFull && parentSelected);
+        final String goalPhrase = "plan unlock pact " + p.getName();
+        final String title = "Pact " + p.getName();
+        final String effect = p.getEffect() != null ? p.getEffect() : "";
+
+        JPanel row = new JPanel(new BorderLayout(4, 0));
+        row.setBackground(ROW_BG);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER),
+                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+
+        // Right column: two stacked controls — the Select/Selected toggle
+        // and the secondary "Set as goal" link.
+        JPanel right = new JPanel();
+        right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
+        right.setOpaque(false);
+        right.setPreferredSize(new Dimension(68, 34));
+
+        String toggleText;
+        Color toggleColor;
+        if (selected) {
+            toggleText = "Selected \u2713";
+            toggleColor = SELECTED_FG;
+        } else if (hasParent && !parentSelected) {
+            toggleText = "requires parent";
+            toggleColor = BUTTON_DISABLED_FG;
+        } else if (budgetFull) {
+            toggleText = "budget full";
+            toggleColor = BUTTON_DISABLED_FG;
+        } else {
+            toggleText = "Select";
+            toggleColor = BUTTON_FG;
+        }
+
+        JLabel toggle = new JLabel(toggleText, SwingConstants.RIGHT);
+        toggle.setForeground(toggleColor);
+        toggle.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 9));
+        toggle.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        if (enabled && goalStore != null) {
+            toggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            toggle.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    if (selected) {
+                        goalStore.deselectPact(id);
+                    } else {
+                        goalStore.selectPact(id);
+                    }
+                    // Stay expanded across the rebuild so the user doesn't
+                    // have to reopen the pacts section after every click.
+                    sectionExpanded.put("Demonic", Boolean.TRUE);
+                    rebuild();
+                }
+            });
+        }
+
+        JLabel goalLink = new JLabel("Set as goal", SwingConstants.RIGHT);
+        goalLink.setForeground(BUTTON_FG);
+        goalLink.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 9));
+        goalLink.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        goalLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        goalLink.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (onSetGoal != null) onSetGoal.accept(goalPhrase);
+            }
+        });
+
+        right.add(toggle);
+        right.add(goalLink);
+
+        // Left column: HTML-wrapped title + effect. Same layout as
+        // makeRow, duplicated here so the pact-specific right column can
+        // be a two-button stack without breaking the shared helper.
+        String safeTitle = escapeHtml(title);
+        String safeMeta = escapeHtml(effect);
+        JLabel textLabel = new JLabel(
+                "<html><div style='width:125px'>"
+                        + "<b style='color:#DCDCDC'>" + safeTitle + "</b>"
+                        + (safeMeta.isEmpty()
+                                ? ""
+                                : "<br><span style='color:#969696;font-size:9px'>" + safeMeta + "</span>")
+                        + "</div></html>");
+        textLabel.setForeground(HEADER_FG);
+        textLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        textLabel.setVerticalAlignment(SwingConstants.TOP);
+
+        row.add(textLabel, BorderLayout.CENTER);
+        row.add(right, BorderLayout.EAST);
+        return row;
     }
 
     /**
@@ -344,7 +556,13 @@ public class UnlockablesPanel extends JPanel {
         header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        final JLabel chevron = new JLabel("\u25B6");
+        // Restore expansion state across rebuilds. Keyed by the first word of
+        // the title so "Demonic Pacts (3/40 • respecs: 3)" stays open after a
+        // pact click even though the full title string changed.
+        final String sectionKey = firstWord(title);
+        final boolean startExpanded = Boolean.TRUE.equals(sectionExpanded.get(sectionKey));
+
+        final JLabel chevron = new JLabel(startExpanded ? "\u25BC" : "\u25B6");
         chevron.setForeground(META_FG);
         chevron.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 
@@ -360,7 +578,7 @@ public class UnlockablesPanel extends JPanel {
         left.add(titleLabel);
 
         header.add(left, BorderLayout.WEST);
-        child.setVisible(false);
+        child.setVisible(startExpanded);
 
         wrapper.add(header);
         wrapper.add(child);
@@ -371,6 +589,7 @@ public class UnlockablesPanel extends JPanel {
                 boolean now = !child.isVisible();
                 child.setVisible(now);
                 chevron.setText(now ? "\u25BC" : "\u25B6");
+                sectionExpanded.put(sectionKey, now);
                 wrapper.revalidate();
                 wrapper.repaint();
             }
@@ -387,6 +606,13 @@ public class UnlockablesPanel extends JPanel {
         });
 
         return wrapper;
+    }
+
+    /** First whitespace-delimited token of a section title, used as the expansion-state key. */
+    private static String firstWord(String title) {
+        if (title == null) return "";
+        int sp = title.indexOf(' ');
+        return sp < 0 ? title : title.substring(0, sp);
     }
 
     private JPanel newGroupPanel(String title) {
