@@ -72,6 +72,8 @@ public class LeaguesAiPlugin extends Plugin {
     // Constructed in loadDatabaseAsync() once TaskRepositoryImpl exists.
     private volatile GoalPlanner goalPlanner;
 
+    private volatile DatabaseSeeder databaseSeeder;
+
     private LeaguesAiPanel panel;
     private NavigationButton navButton;
     private ExecutorService llmExecutor;
@@ -148,6 +150,9 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.add(widgetOverlay);
         overlayManager.add(requiredItemsOverlay);
 
+        // Initialise the database seeder (seeds on first run before loading)
+        databaseSeeder = new DatabaseSeeder();
+
         // Async load the database so the game thread is not blocked
         llmExecutor.submit(this::loadDatabaseAsync);
 
@@ -165,6 +170,7 @@ public class LeaguesAiPlugin extends Plugin {
         try {
             File dbFile = new File(System.getProperty("user.home"),
                 ".runelite/leagues-ai/data/leagues-vi-tasks.db");
+            databaseSeeder.seedIfAbsent(dbFile);
             DatabaseLoader loader = new DatabaseLoader(dbFile);
             List<Task> tasks = loader.loadTasks();
             List<Area> areas = loader.loadAreas();
@@ -650,6 +656,63 @@ public class LeaguesAiPlugin extends Plugin {
                 panel.getSettingsPanel().setDatabaseStatus("Reloading...", false));
             llmExecutor.submit(this::loadDatabaseAsync);
         });
+
+        // Wire BuildsPanel callbacks
+        if (panel.getBuildsPanel() != null) {
+            BuildsPanel bp = panel.getBuildsPanel();
+
+            bp.setOnActivate(build -> {
+                // Called on background thread from BuildsPanel's internal executor
+                activateBuild(build);
+                SwingUtilities.invokeLater(() -> {
+                    bp.showToast("Build activated.");
+                    if (buildStore != null) bp.refreshBuilds(buildStore);
+                });
+            });
+
+            bp.setOnExport(build -> {
+                // Show JFileChooser on EDT
+                SwingUtilities.invokeLater(() -> {
+                    javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+                    fc.setSelectedFile(new File(build.getId() != null ? build.getId() : "build" + ".json"));
+                    int result = fc.showSaveDialog(panel);
+                    if (result == javax.swing.JFileChooser.APPROVE_OPTION && buildStore != null) {
+                        try {
+                            buildStore.exportToFile(build, fc.getSelectedFile());
+                            bp.showToast("Saved to " + fc.getSelectedFile().getName());
+                        } catch (Exception ex) {
+                            bp.showToast("Export failed: " + ex.getMessage());
+                        }
+                    }
+                });
+            });
+
+            bp.setOnImport(() -> {
+                SwingUtilities.invokeLater(() -> {
+                    javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+                    int result = fc.showOpenDialog(panel);
+                    if (result == javax.swing.JFileChooser.APPROVE_OPTION && buildStore != null) {
+                        try {
+                            buildStore.importFromFile(fc.getSelectedFile());
+                            bp.refreshBuilds(buildStore);
+                            bp.showToast("Build imported.");
+                        } catch (IllegalArgumentException ex) {
+                            bp.showToast("Invalid build file: " + ex.getMessage());
+                        } catch (Exception ex) {
+                            bp.showToast("Import failed: " + ex.getMessage());
+                        }
+                    }
+                });
+            });
+
+            // Initial load — buildStore may still be null here (loaded async);
+            // refreshBuilds handles null gracefully.
+            bp.refreshBuilds(buildStore);
+        }
+
+        // Wire Goals panel → Builds panel navigation
+        panel.getGoalsPanel().setOnBrowseBuilds(() ->
+                SwingUtilities.invokeLater(panel::switchToBuildsTab));
     }
 
     @Subscribe
