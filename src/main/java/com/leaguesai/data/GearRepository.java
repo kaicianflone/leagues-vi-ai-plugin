@@ -91,11 +91,11 @@ public class GearRepository {
                     GearItem item = parseDbRow(rs);
                     result.put(item.getId(), item);
                 } catch (Exception rowErr) {
-                    // Skip bad row, keep loading.
+                    log.warn("GearRepository: skipping bad DB row: {}", rowErr.getMessage());
                 }
             }
         } catch (Exception e) {
-            // Table missing or DB connection failure — return empty.
+            log.warn("GearRepository: DB load failed (table missing or connection error): {}", e.getMessage());
             return Collections.emptyMap();
         }
         return result;
@@ -138,7 +138,14 @@ public class GearRepository {
         }
 
         String slotStr = rs.getString("slot");
-        GearSlot slot = slotStr != null ? GearSlot.valueOf(slotStr) : null;
+        GearSlot slot = null;
+        if (slotStr != null) {
+            try {
+                slot = GearSlot.valueOf(slotStr);
+            } catch (IllegalArgumentException e) {
+                log.warn("GearRepository: unrecognized GearSlot '{}', treating as null", slotStr);
+            }
+        }
 
         return GearItem.builder()
                 .id(rs.getString("id"))

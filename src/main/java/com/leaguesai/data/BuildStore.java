@@ -14,7 +14,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -147,7 +146,7 @@ public class BuildStore {
 
         // 3. Max import count
         if (buildsArray.size() > MAX_IMPORT_BUILDS) {
-            throw new IllegalArgumentException("Invalid build file: max 5 builds per file");
+            throw new IllegalArgumentException("Invalid build file: max " + MAX_IMPORT_BUILDS + " builds per file");
         }
 
         // 4 + 5. Validate each build

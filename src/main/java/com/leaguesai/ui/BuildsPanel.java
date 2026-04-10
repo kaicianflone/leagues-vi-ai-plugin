@@ -173,6 +173,11 @@ public class BuildsPanel extends JPanel {
         this.onImport = r;
     }
 
+    /** Shut down the internal executor. Call from plugin shutDown(). */
+    public void shutdown() {
+        executor.shutdownNow();
+    }
+
     /** Reload the build list from BuildStore. Call after import/save. */
     public void refreshBuilds(BuildStore buildStore) {
         if (buildStore == null) {

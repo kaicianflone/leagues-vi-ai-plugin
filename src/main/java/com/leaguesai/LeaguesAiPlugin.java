@@ -445,8 +445,15 @@ public class LeaguesAiPlugin extends Plugin {
      *   <li>If steps empty (goals-only): update Goals panel directly with banner</li>
      * </ol>
      */
-    public void activateBuild(Build build) {
-        if (build == null) return;
+    public boolean activateBuild(Build build) {
+        if (build == null) return false;
+        if (buildExpander == null) {
+            log.warn("activateBuild: buildExpander not ready (db still loading?), skipping");
+            SwingUtilities.invokeLater(() -> {
+                if (panel != null) panel.setStatus("Build not ready — database still loading.");
+            });
+            return false;
+        }
         if (chatService != null) {
             chatService.cancelPendingPlan();
         }
@@ -543,6 +550,7 @@ public class LeaguesAiPlugin extends Plugin {
                 });
                 log.info("activateBuild: goals-only mode for build '{}'", build.getName());
             }
+            return true;
 
         } catch (Exception e) {
             log.error("activateBuild failed for build '{}': {}",
@@ -553,6 +561,7 @@ public class LeaguesAiPlugin extends Plugin {
                     panel.setStatus("Build activation failed: " + e.getMessage());
                 }
             });
+            return false;
         }
     }
 
@@ -673,9 +682,9 @@ public class LeaguesAiPlugin extends Plugin {
 
             bp.setOnActivate(build -> {
                 // Called on background thread from BuildsPanel's internal executor
-                activateBuild(build);
+                boolean ok = activateBuild(build);
                 SwingUtilities.invokeLater(() -> {
-                    bp.showToast("Build activated.");
+                    if (ok) bp.showToast("Build activated.");
                     if (buildStore != null) bp.refreshBuilds(buildStore);
                 });
             });
@@ -780,6 +789,10 @@ public class LeaguesAiPlugin extends Plugin {
         }
 
         clientToolbar.removeNavigation(navButton);
+
+        if (panel != null && panel.getBuildsPanel() != null) {
+            panel.getBuildsPanel().shutdown();
+        }
 
         if (llmExecutor != null) {
             llmExecutor.shutdown();
