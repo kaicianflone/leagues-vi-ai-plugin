@@ -1,5 +1,6 @@
 package com.leaguesai.data;
 
+import com.leaguesai.data.model.Build;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -7,6 +8,8 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.HashSet;
 
 import static org.junit.Assert.*;
 
@@ -182,6 +185,81 @@ public class GoalStoreTest {
         assertFalse(store.selectPact(null));
         assertFalse(store.selectPact(""));
         assertEquals(0, store.getSelectedPactCount());
+    }
+
+    // ----- Phase 2 PR 4: unionBuildPicks ----------------------------------------
+
+    @Test
+    public void unionBuildPicks_merges_all_three_sets() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+
+        Build build = Build.builder()
+                .relicIds(new HashSet<>(Arrays.asList("r1", "r2")))
+                .areaIds(new HashSet<>(Arrays.asList("a1")))
+                .pactIds(new HashSet<>(Arrays.asList("p1")))
+                .build();
+
+        store.unionBuildPicks(build);
+
+        assertTrue(store.getRelicGoals().contains("r1"));
+        assertTrue(store.getRelicGoals().contains("r2"));
+        assertTrue(store.getAreaGoals().contains("a1"));
+        assertTrue(store.getPactGoals().contains("p1"));
+    }
+
+    @Test
+    public void unionBuildPicks_does_not_touch_selectedPactIds() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        store.selectPact("existing_pact");
+
+        Build build = Build.builder()
+                .pactIds(new HashSet<>(Arrays.asList("new_pact")))
+                .build();
+        store.unionBuildPicks(build);
+
+        // pactGoals should contain new_pact
+        assertTrue(store.getPactGoals().contains("new_pact"));
+        // selectedPactIds must NOT have new_pact added — union only touches goal sets
+        assertFalse("unionBuildPicks must not add to selectedPactIds",
+                store.isPactSelected("new_pact"));
+        // The existing selection is untouched
+        assertTrue("existing pact selection must survive unionBuildPicks",
+                store.isPactSelected("existing_pact"));
+        assertEquals("selectedPactIds size must remain 1", 1, store.getSelectedPactCount());
+    }
+
+    @Test
+    public void unionBuildPicks_single_save() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertFalse("file should not exist before first write", f.exists());
+
+        Build build = Build.builder()
+                .relicIds(new HashSet<>(Arrays.asList("r1")))
+                .areaIds(new HashSet<>(Arrays.asList("a1")))
+                .pactIds(new HashSet<>(Arrays.asList("p1")))
+                .build();
+
+        store.unionBuildPicks(build);
+
+        assertTrue("goals.json must exist after unionBuildPicks", f.exists());
+
+        // Reload and verify all three ids present — confirms a single complete write
+        GoalStore reloaded = new GoalStore(f);
+        assertTrue(reloaded.isRelicGoal("r1"));
+        assertTrue(reloaded.isAreaGoal("a1"));
+        assertTrue(reloaded.isPactGoal("p1"));
+    }
+
+    @Test
+    public void unionBuildPicks_null_build_is_noop() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        // Must not throw, must leave all sets empty
+        store.unionBuildPicks(null);
+        assertTrue(store.getRelicGoals().isEmpty());
+        assertTrue(store.getAreaGoals().isEmpty());
+        assertTrue(store.getPactGoals().isEmpty());
     }
 
     @Test

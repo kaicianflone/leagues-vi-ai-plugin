@@ -5,6 +5,7 @@ import java.awt.*;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.util.function.Consumer;
+import javax.swing.JOptionPane;
 
 public class SettingsPanel extends JPanel {
 
@@ -24,6 +25,7 @@ public class SettingsPanel extends JPanel {
     private final JTextField goalField;
     private final JButton setGoalButton;
     private final JButton refreshDataButton;
+    private final JButton rescrapeButton;
     private final JLabel dbStatusLabel;
 
     private Consumer<String> onGoalSet;
@@ -153,6 +155,28 @@ public class SettingsPanel extends JPanel {
         refreshDataButton.setAlignmentX(Component.LEFT_ALIGNMENT);
         refreshDataButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         add(refreshDataButton);
+        add(Box.createVerticalStrut(4));
+
+        // Rescrape instructions button
+        rescrapeButton = new JButton("Refresh tasks from wiki");
+        rescrapeButton.setBackground(new Color(80, 60, 100));
+        rescrapeButton.setForeground(Color.WHITE);
+        rescrapeButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+        rescrapeButton.setFocusPainted(false);
+        rescrapeButton.setBorderPainted(false);
+        rescrapeButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        rescrapeButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rescrapeButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        rescrapeButton.addActionListener(e -> JOptionPane.showMessageDialog(
+                this,
+                "To refresh task data:\n"
+                        + "1. Run ./scraper/scrape.sh from the repo root\n"
+                        + "2. Restart the plugin\n\n"
+                        + "The scraper writes to:\n"
+                        + "~/.runelite/leagues-ai/data/leagues-vi-tasks.db",
+                "Refresh Tasks from Wiki",
+                JOptionPane.INFORMATION_MESSAGE));
+        add(rescrapeButton);
         add(Box.createVerticalStrut(8));
 
         // Database status label

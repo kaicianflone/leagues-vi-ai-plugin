@@ -5,6 +5,7 @@ import com.leaguesai.agent.*;
 import com.leaguesai.core.monitors.*;
 import com.leaguesai.data.*;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.Build;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
@@ -28,11 +29,14 @@ import javax.inject.Inject;
 import javax.swing.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @PluginDescriptor(
@@ -68,6 +72,8 @@ public class LeaguesAiPlugin extends Plugin {
     // Constructed in loadDatabaseAsync() once TaskRepositoryImpl exists.
     private volatile GoalPlanner goalPlanner;
 
+    private volatile DatabaseSeeder databaseSeeder;
+
     private LeaguesAiPanel panel;
     private NavigationButton navButton;
     private ExecutorService llmExecutor;
@@ -80,6 +86,10 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile ChatService chatService;
     private volatile CoachPulseService coachPulseService;
     private volatile com.leaguesai.ui.HeartbeatTicker heartbeatTicker;
+    private volatile GearRepository gearRepository;
+    private volatile BuildStore buildStore;
+    private volatile BuildExpander buildExpander;
+    private volatile ProximityOptimizer proximityOptimizer;
 
     /**
      * Set to true at the very top of {@link #shutDown()}. Any in-flight
@@ -141,6 +151,9 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.add(widgetOverlay);
         overlayManager.add(requiredItemsOverlay);
 
+        // Initialise the database seeder (seeds on first run before loading)
+        databaseSeeder = new DatabaseSeeder();
+
         // Async load the database so the game thread is not blocked
         llmExecutor.submit(this::loadDatabaseAsync);
 
@@ -158,6 +171,7 @@ public class LeaguesAiPlugin extends Plugin {
         try {
             File dbFile = new File(System.getProperty("user.home"),
                 ".runelite/leagues-ai/data/leagues-vi-tasks.db");
+            databaseSeeder.seedIfAbsent(dbFile);
             DatabaseLoader loader = new DatabaseLoader(dbFile);
             List<Task> tasks = loader.loadTasks();
             List<Area> areas = loader.loadAreas();
@@ -171,6 +185,14 @@ public class LeaguesAiPlugin extends Plugin {
             goalStore = new GoalStore(goalsFile);
             vectorIndex = new VectorIndex(embeddings);
             goalPlanner = new GoalPlanner(taskRepo);
+
+            // Gear repository and build system
+            File buildsFile = new File(System.getProperty("user.home"),
+                ".runelite/leagues-ai/data/builds.json");
+            gearRepository = new GearRepository(dbFile);
+            buildStore = new BuildStore(buildsFile);
+            buildExpander = new BuildExpander(gearRepository, taskRepo, goalPlanner);
+            proximityOptimizer = new ProximityOptimizer();
 
             String apiKey = config.openaiApiKey();
             LlmClient previous = openAiClient;
@@ -199,6 +221,7 @@ public class LeaguesAiPlugin extends Plugin {
             usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+            chatService.setProximityOptimizer(proximityOptimizer);
             attachPlanCallback(chatService);
             coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
             // (Re)build the heartbeat ticker so it points at the new client.
@@ -227,8 +250,12 @@ public class LeaguesAiPlugin extends Plugin {
             final GoalStore gs = goalStore;
             SwingUtilities.invokeLater(() -> {
                 UnlockablesPanel unlock = new UnlockablesPanel(taskRepo, gs);
+                if (gearRepository != null) unlock.setGearRepository(gearRepository);
                 unlock.setOnSetGoal(this::handleUnlockableGoalClick);
+                unlock.setOnSetGearGoal(item -> stageGearGoal(item));
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
+                // Restore any goals queued in a prior session
+                refreshGoalQueueBar();
             });
 
             SwingUtilities.invokeLater(() -> {
@@ -289,6 +316,7 @@ public class LeaguesAiPlugin extends Plugin {
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
                         chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                        chatService.setProximityOptimizer(proximityOptimizer);
                         attachPlanCallback(chatService);
                         coachPulseService = new CoachPulseService(newClient, contextAssembler);
                         rebuildHeartbeatTicker();
@@ -365,6 +393,180 @@ public class LeaguesAiPlugin extends Plugin {
     }
 
     /**
+     * Snapshot the current GoalStore picks into a new named Build and persist it.
+     * Called from BuildsPanel's "Save current as build" button.
+     */
+    private void saveCurrentAsBuild(String name) {
+        if (buildStore == null || goalStore == null) {
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().showToast("Not ready — try again in a moment.");
+                }
+            });
+            return;
+        }
+        String slug = name.toLowerCase().replaceAll("[^a-z0-9]+", "_");
+        // Make the slug unique if a build with that id already exists.
+        boolean idTaken = buildStore.listAll().stream().anyMatch(b -> slug.equals(b.getId()));
+        String finalSlug = idTaken ? slug + "_" + System.currentTimeMillis() : slug;
+        com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
+                .id(finalSlug)
+                .name(name)
+                .author(System.getProperty("user.name", "me"))
+                .version(1)
+                .relicIds(new java.util.HashSet<>(goalStore.getRelicGoals()))
+                .areaIds(new java.util.HashSet<>(goalStore.getAreaGoals()))
+                .pactIds(new java.util.HashSet<>(goalStore.getPactGoals()))
+                .build();
+        try {
+            buildStore.save(build);
+            log.info("Saved build '{}' (id={})", name, finalSlug);
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().refreshBuilds(buildStore);
+                    panel.getBuildsPanel().showToast("Build \"" + name + "\" saved.");
+                }
+            });
+        } catch (Exception ex) {
+            log.error("Failed to save build '{}'", name, ex);
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().showToast("Save failed: " + ex.getMessage());
+                }
+            });
+        }
+    }
+
+    /**
+     * Stage a gear item as a goal. Does NOT trigger planning — the player can
+     * accumulate multiple goals across gear/relics/areas/pacts, then hit
+     * "Plan goals" in the Goals tab to generate a combined plan.
+     * Called on EDT or llmExecutor (safe either way).
+     */
+    private void stageGearGoal(com.leaguesai.data.model.GearItem item) {
+        if (item == null || goalStore == null) return;
+        boolean added = !goalStore.isGearGoal(item.getId());
+        goalStore.addGearGoal(item.getId());
+        refreshGoalQueueBar();
+        if (added) {
+            SwingUtilities.invokeLater(() -> {
+                panel.switchToGoalsTab();
+                panel.setStatus("Added: " + item.getName());
+            });
+        }
+    }
+
+    /** Push current GoalStore goal counts + names into the GoalsPanel queue bar. */
+    private void refreshGoalQueueBar() {
+        if (panel == null || goalStore == null) return;
+        int total = goalStore.getTotalGoalCount();
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (gearRepository != null) {
+            for (String id : goalStore.getGearGoals()) {
+                com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                if (g != null) names.add(g.getName());
+                else names.add(id);
+            }
+        }
+        for (String id : goalStore.getRelicGoals()) names.add(id);
+        for (String id : goalStore.getAreaGoals()) names.add(id);
+        panel.getGoalsPanel().updateGoalQueue(total, names);
+    }
+
+    /**
+     * Fire the planner for all currently staged goals (gear + relics + areas + pacts).
+     * Sends a natural-language message to ChatService so the LLM generates a real plan
+     * and it appears in chat + GoalsPanel. Called on llmExecutor.
+     */
+    private void planAllStagedGoals() {
+        if (goalStore == null || chatService == null) return;
+        int total = goalStore.getTotalGoalCount();
+        if (total == 0) {
+            SwingUtilities.invokeLater(() -> panel.setStatus("No goals staged yet."));
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder("plan ");
+        java.util.List<String> parts = new java.util.ArrayList<>();
+
+        if (gearRepository != null && !goalStore.getGearGoals().isEmpty()) {
+            java.util.List<String> gearNames = new java.util.ArrayList<>();
+            for (String id : goalStore.getGearGoals()) {
+                com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                gearNames.add(g != null ? g.getName() : id);
+            }
+            parts.add("get gear: " + String.join(", ", gearNames));
+        }
+        for (String id : goalStore.getRelicGoals()) parts.add("unlock relic " + id);
+        for (String id : goalStore.getAreaGoals()) parts.add("unlock area " + id);
+        for (String id : goalStore.getPactGoals()) parts.add("unlock pact " + id);
+        sb.append(String.join("; ", parts));
+        sb.append(" — give me an ordered task list for Leagues VI Demonic Pacts");
+
+        String planPhrase = sb.toString();
+        log.info("planAllStagedGoals: sending '{}' to ChatService", planPhrase);
+        try {
+            String response = chatService.sendMessage(planPhrase);
+            if (response != null && !response.isEmpty()) {
+                SwingUtilities.invokeLater(() -> {
+                    panel.switchToGoalsTab();
+                });
+            }
+        } catch (Exception ex) {
+            log.error("planAllStagedGoals failed: {}", ex.getMessage(), ex);
+            SwingUtilities.invokeLater(() -> panel.setStatus("Plan failed: " + ex.getMessage()));
+        }
+    }
+
+    /**
+     * Save all currently staged goals (gear + relics + areas + pacts) as a named build.
+     * Shows an input dialog for the build name, then persists to BuildStore.
+     */
+    private void saveGoalsAsBuild() {
+        SwingUtilities.invokeLater(() -> {
+            if (goalStore == null || buildStore == null) return;
+            String name = javax.swing.JOptionPane.showInputDialog(
+                    panel, "Build name:", "Save goals as build", javax.swing.JOptionPane.PLAIN_MESSAGE);
+            if (name == null || name.trim().isEmpty()) return;
+            name = name.trim();
+
+            // Resolve gear goals to a slot map
+            java.util.Map<com.leaguesai.data.model.GearSlot, String> gear = new java.util.LinkedHashMap<>();
+            if (gearRepository != null) {
+                for (String id : goalStore.getGearGoals()) {
+                    com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                    if (g != null && g.getSlot() != null) gear.put(g.getSlot(), g.getId());
+                }
+            }
+
+            String slug = name.toLowerCase().replaceAll("[^a-z0-9]+", "_");
+            boolean idTaken = buildStore.listAll().stream().anyMatch(b -> slug.equals(b.getId()));
+            String finalSlug = idTaken ? slug + "_" + System.currentTimeMillis() : slug;
+
+            com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
+                    .id(finalSlug).name(name)
+                    .author(System.getProperty("user.name", "me")).version(1)
+                    .gear(gear)
+                    .relicIds(new java.util.HashSet<>(goalStore.getRelicGoals()))
+                    .areaIds(new java.util.HashSet<>(goalStore.getAreaGoals()))
+                    .pactIds(new java.util.HashSet<>(goalStore.getPactGoals()))
+                    .build();
+
+            try {
+                buildStore.save(build);
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().refreshBuilds(buildStore);
+                    panel.getBuildsPanel().showToast("Build \"" + name + "\" saved.");
+                }
+                panel.setStatus("Saved build: " + name);
+            } catch (Exception ex) {
+                log.error("saveGoalsAsBuild failed: {}", ex.getMessage(), ex);
+                panel.setStatus("Save failed: " + ex.getMessage());
+            }
+        });
+    }
+
+    /**
      * Attach the plan-created callback to a freshly-built ChatService so that
      * a successful planner run updates the goals panel (accordion + review
      * banner) and the overlay controller. The chat panel intentionally does
@@ -403,6 +605,142 @@ public class LeaguesAiPlugin extends Plugin {
             log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
                     total, withLocation, review != null);
         });
+    }
+
+    /**
+     * Activate a gear build: expand into a task plan, persist goal picks, update UI.
+     *
+     * <p>Must be called on the llmExecutor thread (not EDT). The BuildsPanel
+     * Activate button dispatches here via llmExecutor.submit().
+     *
+     * <p>Order of operations (critical — do NOT reorder):
+     * <ol>
+     *   <li>Cancel any in-flight chat plan (stale-plan race guard)</li>
+     *   <li>Expand the build (read-only — no state mutation yet)</li>
+     *   <li>If expansion throws, log + toast, leave GoalStore untouched</li>
+     *   <li>Persist goal picks (GoalStore.unionBuildPicks)</li>
+     *   <li>If steps non-empty: mirror attachPlanCallback body (panel + overlays)</li>
+     *   <li>If steps empty (goals-only): update Goals panel directly with banner</li>
+     * </ol>
+     */
+    public boolean activateBuild(Build build) {
+        if (build == null) return false;
+        if (buildExpander == null) {
+            log.warn("activateBuild: buildExpander not ready (db still loading?), skipping");
+            SwingUtilities.invokeLater(() -> {
+                if (panel != null) panel.setStatus("Build not ready — database still loading.");
+            });
+            return false;
+        }
+        if (chatService != null) {
+            chatService.cancelPendingPlan();
+        }
+
+        try {
+            PlayerContext ctx = contextAssembler.assemble();
+
+            // Step 2: Expand first (read-only — GoalStore not touched yet)
+            CompositeGoal goal = buildExpander.expand(build, ctx);
+
+            // Step 3: Build PlannedSteps (mirrors ChatService lines 283-316 — pure transform)
+            List<Task> tasks = goal.getTaskBatch();
+            net.runelite.api.coords.WorldPoint loc = ctx.getLocation();
+            List<Task> optimized = PlannerOptimizer.optimizeOrder(
+                    tasks != null ? tasks : Collections.emptyList(), loc);
+
+            List<PlannedStep> steps = optimized.stream()
+                    .map(t -> {
+                        List<Integer> npcIds = new ArrayList<>();
+                        if (t.getTargetNpcs() != null) t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
+                        List<Integer> objIds = new ArrayList<>();
+                        if (t.getTargetObjects() != null) t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
+                        List<Integer> itemIds = new ArrayList<>();
+                        if (t.getTargetItems() != null) t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
+                        com.leaguesai.overlay.OverlayData overlayData =
+                                com.leaguesai.overlay.OverlayData.builder()
+                                        .targetTile(t.getLocation())
+                                        .targetNpcIds(npcIds)
+                                        .targetObjectIds(objIds)
+                                        .targetItemIds(itemIds)
+                                        .pathPoints(Collections.emptyList())
+                                        .widgetIds(Collections.emptyList())
+                                        .showArrow(t.getLocation() != null)
+                                        .showMinimap(t.getLocation() != null)
+                                        .showWorldMap(t.getLocation() != null)
+                                        .build();
+                        return PlannedStep.builder()
+                                .task(t)
+                                .destination(t.getLocation())
+                                .instruction(t.getName())
+                                .overlayData(overlayData)
+                                .build();
+                    })
+                    .collect(Collectors.toList());
+
+            // Step 3b: Relic-aware proximity reorder (post-PlannedStep pass)
+            if (proximityOptimizer != null && !steps.isEmpty()) {
+                steps = proximityOptimizer.optimize(steps, ctx, ctx.getUnlockedAreas());
+            }
+
+            // Step 4: Now persist (after successful expansion)
+            if (goalStore != null) {
+                goalStore.unionBuildPicks(build);
+            }
+
+            if (!steps.isEmpty()) {
+                // Step 5a: Full plan path — mirror exactly what attachPlanCallback does
+                contextAssembler.setCurrentGoal(build.getName());
+                contextAssembler.setCurrentPlan(steps);
+
+                final List<PlannedStep> finalSteps = steps;
+                final String buildName = build.getName();
+                final int total = steps.size();
+
+                if (panel != null) {
+                    panel.getGoalsPanel().setGoal(buildName);
+                    panel.getGoalsPanel().setProgress(0, total);
+                    panel.getGoalsPanel().setReviewBanner(null);
+                    panel.getGoalsPanel().setSteps(finalSteps);
+                }
+                SwingUtilities.invokeLater(() -> {
+                    if (panel != null) {
+                        panel.setStatus("Build: " + buildName);
+                        panel.setProgress(0, total);
+                        panel.switchToGoalsTab();
+                    }
+                    PlannedStep first = finalSteps.get(0);
+                    if (first != null && overlayController != null) {
+                        overlayController.setActiveStep(first);
+                    }
+                });
+                log.info("activateBuild: activated '{}' with {} steps", buildName, total);
+            } else {
+                // Step 5b: Goals-only path — direct panel update, NO onPlanCreated
+                final String buildName = build.getName();
+                SwingUtilities.invokeLater(() -> {
+                    if (panel != null && panel.getGoalsPanel() != null) {
+                        panel.getGoalsPanel().setGoal(buildName);
+                        // Show a banner so user knows gear chain is pending
+                        panel.getGoalsPanel().setReviewBanner(
+                            "Goals set — gear task chain will activate on launch-day scrape");
+                        panel.switchToGoalsTab();
+                    }
+                });
+                log.info("activateBuild: goals-only mode for build '{}'", build.getName());
+            }
+            return true;
+
+        } catch (Exception e) {
+            log.error("activateBuild failed for build '{}': {}",
+                      build.getName(), e.getMessage(), e);
+            // Do NOT touch GoalStore — leave it untouched on error
+            SwingUtilities.invokeLater(() -> {
+                if (panel != null) {
+                    panel.setStatus("Build activation failed: " + e.getMessage());
+                }
+            });
+            return false;
+        }
     }
 
     /**
@@ -494,6 +832,7 @@ public class LeaguesAiPlugin extends Plugin {
                 openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    chatService.setProximityOptimizer(proximityOptimizer);
                     attachPlanCallback(chatService);
                     coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
                     rebuildHeartbeatTicker();
@@ -514,6 +853,72 @@ public class LeaguesAiPlugin extends Plugin {
                 panel.getSettingsPanel().setDatabaseStatus("Reloading...", false));
             llmExecutor.submit(this::loadDatabaseAsync);
         });
+
+        // Wire BuildsPanel callbacks
+        if (panel.getBuildsPanel() != null) {
+            BuildsPanel bp = panel.getBuildsPanel();
+
+            bp.setOnBackToGoals(() -> panel.switchToGoalsTab());
+
+            bp.setOnActivate(build -> {
+                // Called on background thread from BuildsPanel's internal executor
+                boolean ok = activateBuild(build);
+                SwingUtilities.invokeLater(() -> {
+                    if (ok) bp.showToast("Build activated.");
+                    if (buildStore != null) bp.refreshBuilds(buildStore);
+                });
+            });
+
+            bp.setOnExport(build -> {
+                // Show JFileChooser on EDT
+                SwingUtilities.invokeLater(() -> {
+                    javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+                    fc.setSelectedFile(new File(build.getId() != null ? build.getId() : "build" + ".json"));
+                    int result = fc.showSaveDialog(panel);
+                    if (result == javax.swing.JFileChooser.APPROVE_OPTION && buildStore != null) {
+                        try {
+                            buildStore.exportToFile(build, fc.getSelectedFile());
+                            bp.showToast("Saved to " + fc.getSelectedFile().getName());
+                        } catch (Exception ex) {
+                            bp.showToast("Export failed: " + ex.getMessage());
+                        }
+                    }
+                });
+            });
+
+            bp.setOnImport(() -> {
+                SwingUtilities.invokeLater(() -> {
+                    javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+                    int result = fc.showOpenDialog(panel);
+                    if (result == javax.swing.JFileChooser.APPROVE_OPTION && buildStore != null) {
+                        try {
+                            buildStore.importFromFile(fc.getSelectedFile());
+                            bp.refreshBuilds(buildStore);
+                            bp.showToast("Build imported.");
+                        } catch (IllegalArgumentException ex) {
+                            bp.showToast("Invalid build file: " + ex.getMessage());
+                        } catch (Exception ex) {
+                            bp.showToast("Import failed: " + ex.getMessage());
+                        }
+                    }
+                });
+            });
+
+            bp.setOnSaveAsBuild(name -> saveCurrentAsBuild(name));
+
+            // Initial load — buildStore may still be null here (loaded async);
+            // refreshBuilds handles null gracefully.
+            bp.refreshBuilds(buildStore);
+        }
+
+        // Wire Goals panel → Builds panel navigation
+        panel.getGoalsPanel().setOnBrowseBuilds(() ->
+                SwingUtilities.invokeLater(panel::switchToBuildsTab));
+
+        // Wire goal queue bar actions
+        panel.getGoalsPanel().setOnPlanGoals(() ->
+                llmExecutor.submit(this::planAllStagedGoals));
+        panel.getGoalsPanel().setOnSaveGoalsAsBuild(this::saveGoalsAsBuild);
     }
 
     @Subscribe
@@ -571,6 +976,10 @@ public class LeaguesAiPlugin extends Plugin {
         }
 
         clientToolbar.removeNavigation(navButton);
+
+        if (panel != null && panel.getBuildsPanel() != null) {
+            panel.getBuildsPanel().shutdown();
+        }
 
         if (llmExecutor != null) {
             llmExecutor.shutdown();

@@ -5,6 +5,73 @@ All notable changes to the Leagues VI AI Plugin. Format loosely follows
 pre-launch (2026-04-15); the first tagged release will be cut on or after
 launch day.
 
+## [0.3.0.0] — 2026-04-10 — PR 3: Builds System
+
+Friends can now load a curated build (Melee Bosser, Ranged PvM, Skiller, etc.),
+and the planner chains every relic/area/pact/gear-task prerequisite automatically.
+Builds are portable JSON files you can pass around in Discord.
+
+### Added
+
+- **Builds system** — 5 seeded build archetypes (`src/main/resources/builds.json`):
+  Melee Bosser, Ranged PvM DPS, Skiller/Point Farmer, Ironmeme One-Defence Pure,
+  All-Rounder Starter. Each declares target gear per slot, required relics/areas/pacts,
+  and optional skill targets.
+- **`BuildsPanel`** — new card UI accessible via "Browse Builds" in the Goals tab.
+  Sub-tabs: Templates / Saved. Each card shows pact budget (X/40 with warning if over),
+  relic/area counts, and Activate + Export buttons. Import accepts Discord-shared JSON.
+- **`BuildStore`** — atomic JSON persistence (`~/.runelite/leagues-ai/data/builds.json`).
+  Import validates schema, id allowlist, and max-5-per-file cap. Seeds load from classpath.
+- **`BuildExpander`** — resolves a build into a `CompositeGoal`. For each gear slot, looks
+  up granting tasks via `TaskRepository.findByTargetItemId` (in-memory int comparison,
+  no LIKE collision). Falls back to `gear.json` `taskOverrides` for launch-day reliability.
+  Returns goals-only mode gracefully when `target_items` column is empty.
+- **`GoalType.BUILD`** + `GoalSpec.terminalTaskIds` — new goal type that bypasses the
+  relic/area gap-closing loop and feeds multi-terminal task sets directly into `buildDag`.
+- **`GoalStore.unionBuildPicks`** — single atomic write that merges relicGoals/areaGoals/
+  pactGoals without burning a pact respec. Build activation never touches `selectedPactIds`.
+- **`TaskRepository.findByTargetItemId`** — in-memory lookup on the already-loaded task
+  list, keyed by `wikiItemId`.
+- **`GearRepository`** — loads `gear.json` from classpath (DB-backed fallback).
+  25 items covering Bandos, Armadyl, Barrows Gloves, Fire/Infernal Cape, AoT, Occult,
+  Twisted Bow, Dragon Arrows, Primordial/Eternal/Pegasian boots.
+- **`GearSlot` enum + `GearItem` + `Build` data models.**
+- **`DatabaseSeeder`** — copies bundled `leagues-vi-tasks.db` to
+  `~/.runelite/leagues-ai/data/` on first startup so friends don't need to run the scraper.
+- **`SettingsPanel` rescrape button** — triggers an in-process re-scrape on demand.
+- **`ProximityOptimizer`** — relic-aware nearest-neighbour task pathing. Replaces naive
+  linear task order with a graph walk that minimises travel between task locations,
+  accounting for relic teleport options.
+- **`VectorIndex` item embeddings** — extends the vector index to cover item descriptions
+  alongside tasks, enabling "find tasks that grant X item" semantic search.
+- **`TaskItemExtractor` + `ItemStatsScraper`** (scraper module) — post-processes scraped
+  task names/descriptions to extract equipment targets and populate `tasks.target_items`.
+  Verb allowlist: equip/obtain/acquire/wear/wield (no false positives on diary verbs).
+- **`ChatService.cancelPendingPlan`** — atomic `planGeneration` increment that invalidates
+  in-flight chat plans when a build is activated, preventing stale-plan races.
+
+### Changed
+
+- **`GoalPlanner`** — BUILD branch added to `resolveCompositeGoal`; bypasses gap-closing
+  loop, feeds terminal task IDs into existing `buildDag` + `topologicalSort`.
+- **`PromptBuilder`** — new `buildGearContext()` method + 4-arg `buildSystemPrompt`
+  overload that includes target gear in the system prompt.
+- **`WikiScraper.TASK_PAGES`** — now targets `Demonic_Pacts_League/Tasks` (was
+  Trailblazer Reloaded). Scraper is ready for 2026-04-15 launch day.
+- **`LeaguesAiPlugin.activateBuild`** — returns `boolean` (true=success, false=exception)
+  so the toast only fires on genuine success. Guards against `buildExpander == null` when
+  DB is still loading.
+
+### Fixed
+
+- `GearRepository`: `GearSlot.valueOf()` crash on unrecognized DB slot strings wrapped
+  in try-catch with `log.warn`. Bad rows are skipped cleanly, not silently swallowed.
+- `BuildsPanel.executor` (`ExecutorService`) now shut down in `LeaguesAiPlugin.shutDown()`
+  via `BuildsPanel.shutdown()`.
+- `BuildStore`: hardcoded `"max 5 builds per file"` string replaced with constant reference.
+
+---
+
 ## [Unreleased] — Phase 2, PR 2: Chained Goal Planner
 
 The Phase 1 "Set as goal" button was a no-op because the planner was a flat

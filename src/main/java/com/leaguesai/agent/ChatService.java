@@ -36,6 +36,10 @@ public class ChatService {
     // arg is the persona review verdict text, which may be null on failure.
     private volatile PlanCallback onPlanCreated;
 
+    // Optional post-PlannedStep proximity optimizer (relic-aware nearest-neighbour).
+    // Set via setter so the existing 5-arg constructor and tests remain unchanged.
+    private volatile ProximityOptimizer proximityOptimizer;
+
     /** Functional callback so we can pass three args without nesting BiConsumers. */
     @FunctionalInterface
     public interface PlanCallback {
@@ -141,6 +145,21 @@ public class ChatService {
      */
     public void setOnPlanCreated(PlanCallback callback) {
         this.onPlanCreated = callback;
+    }
+
+    /** Plugs in the relic-aware proximity optimizer (null = skip reordering). */
+    public void setProximityOptimizer(ProximityOptimizer optimizer) {
+        this.proximityOptimizer = optimizer;
+    }
+
+    /**
+     * Atomically invalidates any in-flight plan resolution (increments the
+     * generation counter). Called by {@code LeaguesAiPlugin.activateBuild}
+     * before firing a build-driven plan, so a stale chat plan cannot overwrite
+     * the build plan via the shared {@code onPlanCreated} callback.
+     */
+    public void cancelPendingPlan() {
+        planGeneration.incrementAndGet();
     }
 
     /**
@@ -314,6 +333,12 @@ public class ChatService {
                                 .build();
                     })
                     .collect(Collectors.toList());
+
+            // Relic-aware proximity reorder (post-PlannedStep pass; no-op when null).
+            if (proximityOptimizer != null && !steps.isEmpty()) {
+                Set<String> unlockedAreas = ctxForParser.getUnlockedAreas();
+                steps = proximityOptimizer.optimize(steps, ctxForParser, unlockedAreas);
+            }
 
             contextAssembler.setCurrentGoal(userMessage);
             contextAssembler.setCurrentPlan(steps);

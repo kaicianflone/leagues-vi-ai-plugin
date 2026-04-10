@@ -22,6 +22,7 @@ public class LeaguesAiPanel extends PluginPanel {
     private final ChatPanel chatPanel;
     private final GoalsPanel goalsPanel;
     private final SettingsPanel settingsPanel;
+    private BuildsPanel buildsPanel;
 
     private JButton chatTabButton;
     private JButton goalsTabButton;
@@ -42,6 +43,7 @@ public class LeaguesAiPanel extends PluginPanel {
     private static final String TAB_CHAT = "Chat";
     private static final String TAB_GOALS = "Goals";
     private static final String TAB_SETTINGS = "Settings";
+    private static final String TAB_BUILDS = "Builds";
 
     private static final String CARD_PRE_AUTH = "preAuth";
     private static final String CARD_MAIN = "main";
@@ -83,6 +85,7 @@ public class LeaguesAiPanel extends PluginPanel {
         chatPanel = new ChatPanel();
         goalsPanel = new GoalsPanel();
         settingsPanel = new SettingsPanel();
+        buildsPanel = new BuildsPanel();
 
         // Build both cards (pre-auth + main)
         preAuthPanel = createPreAuthPanel();
@@ -130,6 +133,7 @@ public class LeaguesAiPanel extends PluginPanel {
         contentArea.add(chatPanel, TAB_CHAT);
         contentArea.add(goalsPanel, TAB_GOALS);
         contentArea.add(settingsPanel, TAB_SETTINGS);
+        contentArea.add(buildsPanel, TAB_BUILDS);
 
         centerPanel.add(contentArea, BorderLayout.CENTER);
 
@@ -193,9 +197,15 @@ public class LeaguesAiPanel extends PluginPanel {
     private void switchTab(String tabName) {
         if (cardLayout == null || contentArea == null) return;
         cardLayout.show(contentArea, tabName);
+        // Builds is a card-only view — no corresponding tab button to highlight.
         chatTabButton.setBackground(TAB_CHAT.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
         goalsTabButton.setBackground(TAB_GOALS.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
         settingsTabButton.setBackground(TAB_SETTINGS.equals(tabName) ? TAB_ACTIVE_COLOR : TAB_INACTIVE_COLOR);
+    }
+
+    /** Public hook to navigate to the Builds card. EDT-safe. */
+    public void switchToBuildsTab() {
+        SwingUtilities.invokeLater(() -> switchTab(TAB_BUILDS));
     }
 
     /** Public hook for the chat→goals link button. EDT-safe. */
@@ -244,6 +254,10 @@ public class LeaguesAiPanel extends PluginPanel {
 
     public GoalsPanel getGoalsPanel() {
         return goalsPanel;
+    }
+
+    public BuildsPanel getBuildsPanel() {
+        return buildsPanel;
     }
 
     public SettingsPanel getSettingsPanel() {

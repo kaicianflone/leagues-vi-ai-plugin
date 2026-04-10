@@ -3,6 +3,8 @@ package com.leaguesai.agent;
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.GearItem;
+import com.leaguesai.data.model.GearSlot;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
@@ -226,6 +228,100 @@ public class PromptBuilderTest {
         assertFalse("null repo should omit Relics section", prompt.contains("## Relics"));
         assertFalse("null repo should omit Areas section", prompt.contains("## Areas"));
         assertFalse("null repo should omit Pacts section", prompt.contains("## Demonic Pacts"));
+    }
+
+    // -----------------------------------------------------------------------
+    // buildGearContext tests
+    // -----------------------------------------------------------------------
+
+    @Test
+    public void buildGearContext_empty_list_returns_empty_string() {
+        String result = PromptBuilder.buildGearContext(Collections.emptyList(), null);
+        assertEquals("", result);
+    }
+
+    @Test
+    public void buildGearContext_null_list_returns_empty_string() {
+        String result = PromptBuilder.buildGearContext(null, null);
+        assertEquals("", result);
+    }
+
+    @Test
+    public void buildGearContext_includes_item_name_and_slot() {
+        GearItem item = GearItem.builder()
+                .name("Bandos chestplate")
+                .slot(GearSlot.BODY)
+                .build();
+        String result = PromptBuilder.buildGearContext(Collections.singletonList(item), null);
+        assertTrue("Should contain item name", result.contains("Bandos chestplate"));
+        assertTrue("Should contain slot", result.contains("BODY"));
+    }
+
+    @Test
+    public void buildGearContext_shows_only_nonzero_stats() {
+        GearItem item = GearItem.builder()
+                .name("Dragon platebody")
+                .slot(GearSlot.BODY)
+                .attackStab(0)
+                .defenceCrush(54)
+                .build();
+        String result = PromptBuilder.buildGearContext(Collections.singletonList(item), null);
+        assertFalse("Should NOT show zero Stab stat", result.contains("Stab: 0"));
+        assertTrue("Should show non-zero Def crush", result.contains("Def crush: 54"));
+    }
+
+    @Test
+    public void buildGearContext_flags_currently_equipped() {
+        GearItem item = GearItem.builder()
+                .name("Bandos chestplate")
+                .slot(GearSlot.BODY)
+                .build();
+        Map<String, Integer> equipment = new LinkedHashMap<>();
+        equipment.put("Bandos chestplate", 1);
+        PlayerContext ctx = PlayerContext.builder()
+                .levels(new EnumMap<>(Skill.class))
+                .xp(new EnumMap<>(Skill.class))
+                .inventory(new HashMap<>())
+                .equipment(equipment)
+                .completedTasks(new HashSet<>())
+                .unlockedAreas(new HashSet<>())
+                .location(null)
+                .leaguePoints(0)
+                .combatLevel(3)
+                .currentGoal("")
+                .currentPlan(new ArrayList<>())
+                .build();
+        String result = PromptBuilder.buildGearContext(Collections.singletonList(item), ctx);
+        assertTrue("Should flag currently equipped", result.contains("(currently equipped)"));
+    }
+
+    @Test
+    public void buildGearContext_shows_skill_requirements() {
+        Map<String, Integer> reqs = new LinkedHashMap<>();
+        reqs.put("defence", 65);
+        GearItem item = GearItem.builder()
+                .name("Bandos chestplate")
+                .slot(GearSlot.BODY)
+                .skillRequirements(reqs)
+                .build();
+        String result = PromptBuilder.buildGearContext(Collections.singletonList(item), null);
+        assertTrue("Should contain skill name", result.contains("defence"));
+        assertTrue("Should contain level", result.contains("65"));
+    }
+
+    @Test
+    public void buildSystemPrompt_four_arg_includes_gear_section() {
+        GearItem item = GearItem.builder()
+                .name("Bandos chestplate")
+                .slot(GearSlot.BODY)
+                .build();
+        PlayerContext ctx = emptyCtx();
+        String result = PromptBuilder.buildSystemPrompt(ctx, Collections.emptyList(), null,
+                Collections.singletonList(item));
+        assertTrue("Should contain player state section", result.contains("## Player State"));
+        assertTrue("Should contain gear item name", result.contains("Bandos chestplate"));
+        assertTrue("Should contain gear reference header",
+                result.contains("## Gear Reference"));
     }
 
     @Test

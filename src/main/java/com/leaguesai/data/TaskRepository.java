@@ -38,4 +38,12 @@ public interface TaskRepository {
 
     /** Case-insensitive name lookup (exact or substring). */
     Optional<Pact> findPactByName(String name);
+
+    /**
+     * Returns all tasks whose {@code targetItems} list contains the given
+     * wiki item id. Uses in-memory filtering on already-parsed
+     * {@link Task.ItemTarget#getId()} values so there is no prefix-collision
+     * risk (e.g. id 657 will never match id 6570).
+     */
+    List<Task> findByTargetItemId(int wikiItemId);
 }
