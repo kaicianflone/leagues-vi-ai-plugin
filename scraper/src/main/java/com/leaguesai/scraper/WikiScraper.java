@@ -50,6 +50,8 @@ public class WikiScraper {
         }
 
         SqliteWriter writer = new SqliteWriter(dbFile);
+        TaskItemExtractor taskItemExtractor = new TaskItemExtractor();
+        // TODO: run ItemStatsScraper separately via 'scrape-items' Gradle task
         EmbeddingGenerator embedder = (apiKey != null && !apiKey.isEmpty())
                 ? new EmbeddingGenerator(apiKey)
                 : null;
@@ -129,6 +131,12 @@ public class WikiScraper {
                     String stableId = (row.taskId != null && !row.taskId.isEmpty())
                             ? "tbz-" + row.taskId
                             : java.util.UUID.nameUUIDFromBytes(name.getBytes()).toString();
+
+                    // Extract item targets from task name + description
+                    List<TaskItemExtractor.ItemTarget> itemTargets =
+                            taskItemExtractor.extract(name, description);
+                    String targetItemsJson = buildItemTargetsJson(itemTargets);
+
                     writer.upsertTaskWithId(
                             stableId,
                             name,
@@ -144,7 +152,7 @@ public class WikiScraper {
                             locationJson,
                             null,            // target_npcs
                             null,            // target_objects
-                            null,            // target_items
+                            targetItemsJson,
                             url,
                             embedding);
                     totalTasks++;
@@ -156,6 +164,8 @@ public class WikiScraper {
             }
         }
 
+        System.out.println("Item extraction complete.");
+
         writer.close();
 
         System.out.println("\nDone. Tasks written: " + totalTasks + "  Errors: " + totalErrors);
@@ -165,6 +175,29 @@ public class WikiScraper {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Builds a JSON array string from a list of item targets.
+     * Example: {@code [{"id":0,"name":"Bandos chestplate"}]}
+     */
+    private static String buildItemTargetsJson(List<TaskItemExtractor.ItemTarget> targets) {
+        if (targets == null || targets.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < targets.size(); i++) {
+            if (i > 0) sb.append(',');
+            TaskItemExtractor.ItemTarget t = targets.get(i);
+            sb.append("{\"id\":").append(t.wikiItemId)
+              .append(",\"name\":\"").append(escapeJson(t.name)).append("\"}");
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private static String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
 
     /** Extracts the area name from the last path segment, replacing underscores. */
     private static String deriveAreaName(String pagePath) {
