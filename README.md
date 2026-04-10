@@ -8,12 +8,13 @@ A RuneLite plugin that acts as an AI-powered coach for Old School RuneScape's **
 
 ## What it does
 
+- **Builds system.** Load a curated build ("Melee Bosser", "Ranged PvM DPS", "Skiller", etc.) from the Goals tab. The planner automatically chains every relic/area/pact/gear-task prerequisite. Export builds as JSON files to share with friends via Discord; import with one click.
 - **Chat coach.** Ask "what should I do next?", "how do I unlock Grimoire?", or "plan out all the Karamja medium tasks" — the assistant reads your live inventory, levels, equipment, completed tasks, and unlocked areas, then answers with a real plan built from a local task database, not a hallucination.
 - **Chained goal planner.** Click "Set as goal" on any relic, area, or demonic pact in the side panel. The planner computes the league-point gap between your current balance and the target's unlock cost, filters tasks by what you can actually do (skill gates, area unlocks, quest prereqs), and returns a specific batch of tasks ordered by points-per-effort.
 - **Quest Helper-style overlays.** Once a plan is loaded, the plugin activates minimap arrows, a world arrow, path lines, and world map markers for the active step. Ported 1:1 from [Quest Helper](https://github.com/Zoinkwiz/quest-helper) under BSD-2-Clause. Tile, NPC, object, and ground-item highlights exist as hand-rolled placeholders pending a proper QH port (see `CLAUDE.md`).
 - **Adversarial plan review.** Every generated plan is reviewed by three LLM personas (B0aty / Faux / a top UIM player) who each pick the single biggest flaw in the plan from their lens. Output shows as a banner at the top of the Goals tab.
 - **Heartbeat coaching.** A short contextual coaching line updates every 60 seconds based on what you're doing (e.g. "Looking good — two more fishing spots and you've got Karamja easy done").
-- **Pre-scraped data, no external dependencies at runtime.** A standalone scraper builds a SQLite database from the OSRS Wiki (tasks, areas, relics, pacts). The plugin reads from that DB, so chat still works if the wiki is down.
+- **Pre-scraped data, no external dependencies at runtime.** A standalone scraper builds a SQLite database from the OSRS Wiki (tasks, areas, relics, pacts). A bundled snapshot is seeded on first install — no scraper run required to get started.
 
 ---
 
@@ -57,7 +58,19 @@ The plugin auto-detects one of two LLM auth modes on startup:
 
 No key, no OAuth, no chat. The scraper runs without either.
 
-### 2. Set a goal
+### 2. Load a build (fastest start)
+
+Open the **Goals** tab and click **"Browse Builds"** at the bottom. Pick from 5 seeded archetypes:
+
+- **Melee Bosser** — Bandos/Torva, Infernal Cape, Rigour+Piety relics, Kandarin/Wilderness areas
+- **Ranged PvM DPS** — Armadyl/Masori, Twisted Bow, Pegasian Boots, Rigour
+- **Skiller/Point Farmer** — Endless Harvest + Mythic relics, Fossil Island + Zeah, skilling pacts
+- **Ironmeme One-Defence Pure** — void + fire cape, Vengeance Recoil pact
+- **All-Rounder Starter** — rune gear, training relics, safe area picks
+
+Click **Activate** — the planner chains every prerequisite task and loads the plan in one shot. Export/import builds as JSON to share with friends.
+
+### 3. Set a manual goal
 
 Open the **Goals** tab. Pick one of:
 
@@ -72,7 +85,7 @@ The planner fires. Within a few seconds you'll see:
 - A persona review banner explaining the plan's biggest weakness
 - Overlays in-game pointing at the first task
 
-### 3. Work the plan
+### 4. Work the plan
 
 The overlay follows the active step. When you complete a task, the planner advances to the next one. Ask the chat panel questions any time — it sees your live state and the active plan.
 
@@ -86,17 +99,26 @@ The plugin is 5 packages (`core`, `data`, `agent`, `overlay`, `ui`) plus a stand
 flowchart LR
     Wiki[OSRS Wiki] -->|HTTP| Scraper
     Scraper[scraper/DemonicPactsScraper<br/>+ WikiScraper] -->|SQLite| DB[(leagues-vi-tasks.db)]
+    ClasspathDB[bundled DB snapshot] -->|DatabaseSeeder<br/>first-startup copy| DB
 
     DB -->|load on startup| DatabaseLoader
     DatabaseLoader --> TaskRepository[TaskRepository<br/>tasks + relics + areas + pacts]
+
+    GearJSON[gear.json<br/>+ builds.json] -->|GearRepository<br/>BuildStore| BuildExpander
 
     subgraph Plugin["RuneLite plugin (runtime)"]
         direction LR
         TaskRepository --> GoalPlanner
         TaskRepository --> PromptBuilder
         TaskRepository --> UnlockablesPanel
+        TaskRepository --> BuildExpander
 
         User((User)) --> ChatPanel
+        User --> BuildsPanel
+        BuildsPanel -->|activate| LeaguesAiPlugin
+        LeaguesAiPlugin --> BuildExpander
+        BuildExpander --> GoalPlanner
+        BuildExpander --> GoalStore
         UnlockablesPanel -->|Set as goal| ChatService
         ChatPanel --> ChatService
         ChatService --> GoalSpecParser
@@ -111,6 +133,8 @@ flowchart LR
 
         ChatService -->|plan callback| GoalsPanel
         ChatService -->|plan callback| OverlayController
+        LeaguesAiPlugin -->|plan callback| GoalsPanel
+        LeaguesAiPlugin -->|plan callback| OverlayController
         ChatService -->|reply| ChatPanel
         OverlayController --> Minimap[MinimapOverlay]
         OverlayController --> Arrow[ArrowOverlay]
@@ -159,17 +183,27 @@ leagues-vi-ai-plugin/
 │   ├── LeaguesAiPlugin.java      Top-level RuneLite plugin entrypoint + wiring
 │   ├── LeaguesAiConfig.java      RuneLite config surface (API key, toggles)
 │   ├── core/                     EventBus, state monitors, service plumbing
-│   ├── data/                     TaskRepository, DatabaseLoader, GoalStore, models
+│   ├── data/                     TaskRepository, DatabaseLoader, DatabaseSeeder,
+│   │                             GoalStore, BuildStore, GearRepository, VectorIndex,
+│   │                             models/ (Build, GearItem, GearSlot, ...)
 │   ├── agent/                    ChatService, GoalPlanner, GoalSpecParser,
+│   │                             BuildExpander, ProximityOptimizer,
 │   │                             PromptBuilder, PersonaReviewer, LLM clients
 │   ├── overlay/                  Minimap/Arrow/Path/WorldMap overlays (QH ports)
-│   └── ui/                       ChatPanel, GoalsPanel, UnlockablesPanel,
-│                                 SettingsPanel, GoalAccordion
-├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4)
+│   └── ui/                       ChatPanel, GoalsPanel, BuildsPanel,
+│                                 UnlockablesPanel, SettingsPanel, GoalAccordion
+├── src/main/resources/
+│   ├── gear.json                 25 Leagues-relevant gear items (slots, skill reqs,
+│   │                             task overrides for launch-day reliability)
+│   ├── builds.json               5 seeded build archetypes
+│   └── leagues-vi-tasks.db       Bundled DB snapshot (seeded on first install)
+├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4) — 44 test files
 ├── scraper/                      Standalone scraper subproject
 │   └── src/main/java/com/leaguesai/scraper/
-│       ├── WikiScraper.java            Trailblazer Reloaded task scraper
+│       ├── WikiScraper.java            Demonic Pacts League task scraper
 │       ├── DemonicPactsScraper.java    Leagues VI relics/areas/pacts scraper
+│       ├── TaskItemExtractor.java      Extracts equipment targets from task text
+│       ├── ItemStatsScraper.java       Resolves item wiki IDs + stats
 │       ├── HtmlParser.java             Jsoup-based wiki parsing
 │       ├── SqliteWriter.java           UPSERT writer for all tables
 │       └── TaskNormalizer.java         Skill name aliases, difficulty normalisation
@@ -210,11 +244,12 @@ The Settings tab hides itself once either auth mode is established. Chat and Goa
 
 ## Limitations and known gaps (pre-launch)
 
-- **Task data is Trailblazer Reloaded**, not Demonic Pacts. The Leagues VI tasks page on the wiki is still a stub. The scraper will swap on launch day (2026-04-15).
+- **Task data is from the pre-launch wiki stub.** The scraper targets `Demonic_Pacts_League/Tasks` but the wiki page was incomplete at time of writing. Re-run `./scraper/scrape.sh` on launch day (2026-04-15) to get the real task list, filters, and unlock costs.
 - **Unlock costs are zero across relics and areas** because the wiki hasn't published them. The planner treats zero-cost targets as "unknown cost" and returns the top-10 highest-value achievable tasks as a fallback suggestion.
-- **Pact unlock tree is flat.** The wiki doesn't document parent/child pact relationships yet. The UI renders pacts as a single list; a proper tiered view lands in Phase 2 PR 3 post-launch.
+- **Pact unlock tree is flat.** The wiki doesn't document parent/child pact relationships yet. The UI renders pacts as a tiered list (3 tiers); a proper tree view with dependency arrows is a post-launch task.
 - **`GoalStore.isUnlocked`** is hardcoded `false` for everything. Auto-detecting in-game unlock state via varbits is a post-launch task.
 - **Auto-completed quests** from the Leagues VI overview aren't wired into the planner's prereq checking yet.
+- **Gear task linking** depends on `tasks.target_items` being populated. The bundled DB has this from the scraper run, but if a gear item's granting tasks are missing, BuildExpander falls back to goals-only mode with a banner.
 
 See `CLAUDE.md` for the full Phase 2 launch-day task list.
 
