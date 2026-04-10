@@ -282,28 +282,33 @@ public class UnlockablesPanel extends JPanel {
         return buildCollapsible(title, child);
     }
 
+    // Region display order — "" = no region / starter gear shown first.
+    private static final String[] GEAR_REGION_ORDER = {
+        "", "Varlamore", "Karamja",
+        "Asgarnia", "Desert", "Fremennik", "Kandarin",
+        "Kebos_and_Kourend", "Morytania", "Tirannwn", "Wilderness"
+    };
+
     private JPanel buildGearSection() {
         List<GearItem> items = gearRepo != null ? gearRepo.listAll() : java.util.Collections.emptyList();
 
-        // Group by slot in enum declaration order.
-        Map<GearSlot, JPanel> slotGroups = new java.util.LinkedHashMap<>();
-        for (GearSlot slot : GearSlot.values()) {
-            slotGroups.put(slot, newGroupPanel(slotDisplayName(slot)));
+        // Group by region key preserving GEAR_REGION_ORDER.
+        Map<String, JPanel> regionGroups = new LinkedHashMap<>();
+        for (String region : GEAR_REGION_ORDER) {
+            regionGroups.put(region, newGroupPanel(gearAreaDisplayName(region)));
         }
 
         int count = 0;
         for (GearItem item : items) {
-            if (item.getSlot() == null) continue;
-            JPanel grp = slotGroups.get(item.getSlot());
-            if (grp == null) continue;
-            String skillMeta = buildSkillMeta(item);
-            grp.add(makeGearRow(item, skillMeta));
+            String region = item.getRegion() != null ? item.getRegion() : "";
+            JPanel grp = regionGroups.computeIfAbsent(region, k -> newGroupPanel(gearAreaDisplayName(k)));
+            String meta = buildGearMeta(item);
+            grp.add(makeGearRow(item, meta));
             count++;
         }
 
         JPanel child = newChildColumn();
-        for (Map.Entry<GearSlot, JPanel> entry : slotGroups.entrySet()) {
-            // Skip empty slot groups (no items loaded for this slot).
+        for (Map.Entry<String, JPanel> entry : regionGroups.entrySet()) {
             if (entry.getValue().getComponentCount() > 1) {
                 child.add(entry.getValue());
                 child.add(leftAlignedStrut(2));
@@ -314,6 +319,14 @@ public class UnlockablesPanel extends JPanel {
         }
 
         return buildCollapsible("Gear (" + count + ")", child);
+    }
+
+    private static String gearAreaDisplayName(String region) {
+        if (region == null || region.isEmpty()) return "Starter Areas";
+        switch (region) {
+            case "Kebos_and_Kourend": return "Kebos & Kourend";
+            default: return region.replace("_", " ");
+        }
     }
 
     private JPanel makeGearRow(GearItem item, String meta) {
@@ -367,14 +380,16 @@ public class UnlockablesPanel extends JPanel {
         return Character.toUpperCase(raw.charAt(0)) + raw.substring(1).toLowerCase();
     }
 
-    private static String buildSkillMeta(GearItem item) {
+    /** Returns "Slot · skill req" meta string shown under each gear row name. */
+    private static String buildGearMeta(GearItem item) {
+        String slotPart = item.getSlot() != null ? slotDisplayName(item.getSlot()) : "";
         if (item.getSkillRequirements() == null || item.getSkillRequirements().isEmpty()) {
-            return item.getSlot() != null ? slotDisplayName(item.getSlot()) : "";
+            return slotPart;
         }
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(slotPart);
         for (Map.Entry<String, Integer> req : item.getSkillRequirements().entrySet()) {
-            if (sb.length() > 0) sb.append(", ");
-            sb.append(req.getKey()).append(" ").append(req.getValue());
+            if (sb.length() > 0) sb.append(" \u00B7 ");
+            sb.append(capitalize(req.getKey())).append(" ").append(req.getValue());
         }
         return sb.toString();
     }

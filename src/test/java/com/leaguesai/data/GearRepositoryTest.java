@@ -38,7 +38,7 @@ public class GearRepositoryTest {
         assertNotNull("Expected bandos_chestplate to be found", item);
         assertEquals("Bandos chestplate", item.getName());
         assertEquals(GearSlot.BODY, item.getSlot());
-        assertTrue("Expected defenceStab > 0, got: " + item.getDefenceStab(), item.getDefenceStab() > 0);
+        assertEquals("Expected defence 65 requirement", 65, (int) item.getSkillRequirements().get("defence"));
     }
 
     @Test
