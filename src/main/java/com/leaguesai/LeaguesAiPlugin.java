@@ -252,8 +252,10 @@ public class LeaguesAiPlugin extends Plugin {
                 UnlockablesPanel unlock = new UnlockablesPanel(taskRepo, gs);
                 if (gearRepository != null) unlock.setGearRepository(gearRepository);
                 unlock.setOnSetGoal(this::handleUnlockableGoalClick);
-                unlock.setOnSetGearGoal(item -> llmExecutor.submit(() -> activateGearGoal(item)));
+                unlock.setOnSetGearGoal(item -> stageGearGoal(item));
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
+                // Restore any goals queued in a prior session
+                refreshGoalQueueBar();
             });
 
             SwingUtilities.invokeLater(() -> {
@@ -436,29 +438,132 @@ public class LeaguesAiPlugin extends Plugin {
     }
 
     /**
-     * Build a minimal single-item Build from a gear item and activate it through
-     * the same BuildExpander path used for full builds. Called on llmExecutor.
+     * Stage a gear item as a goal. Does NOT trigger planning — the player can
+     * accumulate multiple goals across gear/relics/areas/pacts, then hit
+     * "Plan goals" in the Goals tab to generate a combined plan.
+     * Called on EDT or llmExecutor (safe either way).
      */
-    private void activateGearGoal(com.leaguesai.data.model.GearItem item) {
-        if (item == null) return;
-        com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
-                .id("gear_goal_" + item.getId())
-                .name("Equip " + item.getName())
-                .gear(item.getSlot() != null
-                        ? java.util.Collections.singletonMap(item.getSlot(), item.getId())
-                        : java.util.Collections.emptyMap())
-                .relicIds(java.util.Collections.emptySet())
-                .areaIds(java.util.Collections.emptySet())
-                .pactIds(java.util.Collections.emptySet())
-                .build();
-        boolean ok = activateBuild(build);
-        if (ok) {
-            SwingUtilities.invokeLater(() -> panel.switchToGoalsTab());
-        } else {
-            SwingUtilities.invokeLater(() ->
-                panel.getChatPanel().showError(
-                    "No tasks found for \"" + item.getName() + "\" yet — re-run the scraper on launch day."));
+    private void stageGearGoal(com.leaguesai.data.model.GearItem item) {
+        if (item == null || goalStore == null) return;
+        boolean added = !goalStore.isGearGoal(item.getId());
+        goalStore.addGearGoal(item.getId());
+        refreshGoalQueueBar();
+        if (added) {
+            SwingUtilities.invokeLater(() -> {
+                panel.switchToGoalsTab();
+                panel.setStatus("Added: " + item.getName());
+            });
         }
+    }
+
+    /** Push current GoalStore goal counts + names into the GoalsPanel queue bar. */
+    private void refreshGoalQueueBar() {
+        if (panel == null || goalStore == null) return;
+        int total = goalStore.getTotalGoalCount();
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (gearRepository != null) {
+            for (String id : goalStore.getGearGoals()) {
+                com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                if (g != null) names.add(g.getName());
+                else names.add(id);
+            }
+        }
+        for (String id : goalStore.getRelicGoals()) names.add(id);
+        for (String id : goalStore.getAreaGoals()) names.add(id);
+        panel.getGoalsPanel().updateGoalQueue(total, names);
+    }
+
+    /**
+     * Fire the planner for all currently staged goals (gear + relics + areas + pacts).
+     * Sends a natural-language message to ChatService so the LLM generates a real plan
+     * and it appears in chat + GoalsPanel. Called on llmExecutor.
+     */
+    private void planAllStagedGoals() {
+        if (goalStore == null || chatService == null) return;
+        int total = goalStore.getTotalGoalCount();
+        if (total == 0) {
+            SwingUtilities.invokeLater(() -> panel.setStatus("No goals staged yet."));
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder("plan ");
+        java.util.List<String> parts = new java.util.ArrayList<>();
+
+        if (gearRepository != null && !goalStore.getGearGoals().isEmpty()) {
+            java.util.List<String> gearNames = new java.util.ArrayList<>();
+            for (String id : goalStore.getGearGoals()) {
+                com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                gearNames.add(g != null ? g.getName() : id);
+            }
+            parts.add("get gear: " + String.join(", ", gearNames));
+        }
+        for (String id : goalStore.getRelicGoals()) parts.add("unlock relic " + id);
+        for (String id : goalStore.getAreaGoals()) parts.add("unlock area " + id);
+        for (String id : goalStore.getPactGoals()) parts.add("unlock pact " + id);
+        sb.append(String.join("; ", parts));
+        sb.append(" — give me an ordered task list for Leagues VI Demonic Pacts");
+
+        String planPhrase = sb.toString();
+        log.info("planAllStagedGoals: sending '{}' to ChatService", planPhrase);
+        try {
+            String response = chatService.sendMessage(planPhrase);
+            if (response != null && !response.isEmpty()) {
+                SwingUtilities.invokeLater(() -> {
+                    panel.switchToGoalsTab();
+                });
+            }
+        } catch (Exception ex) {
+            log.error("planAllStagedGoals failed: {}", ex.getMessage(), ex);
+            SwingUtilities.invokeLater(() -> panel.setStatus("Plan failed: " + ex.getMessage()));
+        }
+    }
+
+    /**
+     * Save all currently staged goals (gear + relics + areas + pacts) as a named build.
+     * Shows an input dialog for the build name, then persists to BuildStore.
+     */
+    private void saveGoalsAsBuild() {
+        SwingUtilities.invokeLater(() -> {
+            if (goalStore == null || buildStore == null) return;
+            String name = javax.swing.JOptionPane.showInputDialog(
+                    panel, "Build name:", "Save goals as build", javax.swing.JOptionPane.PLAIN_MESSAGE);
+            if (name == null || name.trim().isEmpty()) return;
+            name = name.trim();
+
+            // Resolve gear goals to a slot map
+            java.util.Map<com.leaguesai.data.model.GearSlot, String> gear = new java.util.LinkedHashMap<>();
+            if (gearRepository != null) {
+                for (String id : goalStore.getGearGoals()) {
+                    com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
+                    if (g != null && g.getSlot() != null) gear.put(g.getSlot(), g.getId());
+                }
+            }
+
+            String slug = name.toLowerCase().replaceAll("[^a-z0-9]+", "_");
+            boolean idTaken = buildStore.listAll().stream().anyMatch(b -> slug.equals(b.getId()));
+            String finalSlug = idTaken ? slug + "_" + System.currentTimeMillis() : slug;
+
+            com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
+                    .id(finalSlug).name(name)
+                    .author(System.getProperty("user.name", "me")).version(1)
+                    .gear(gear)
+                    .relicIds(new java.util.HashSet<>(goalStore.getRelicGoals()))
+                    .areaIds(new java.util.HashSet<>(goalStore.getAreaGoals()))
+                    .pactIds(new java.util.HashSet<>(goalStore.getPactGoals()))
+                    .build();
+
+            try {
+                buildStore.save(build);
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().refreshBuilds(buildStore);
+                    panel.getBuildsPanel().showToast("Build \"" + name + "\" saved.");
+                }
+                panel.setStatus("Saved build: " + name);
+            } catch (Exception ex) {
+                log.error("saveGoalsAsBuild failed: {}", ex.getMessage(), ex);
+                panel.setStatus("Save failed: " + ex.getMessage());
+            }
+        });
     }
 
     /**
@@ -809,6 +914,11 @@ public class LeaguesAiPlugin extends Plugin {
         // Wire Goals panel → Builds panel navigation
         panel.getGoalsPanel().setOnBrowseBuilds(() ->
                 SwingUtilities.invokeLater(panel::switchToBuildsTab));
+
+        // Wire goal queue bar actions
+        panel.getGoalsPanel().setOnPlanGoals(() ->
+                llmExecutor.submit(this::planAllStagedGoals));
+        panel.getGoalsPanel().setOnSaveGoalsAsBuild(this::saveGoalsAsBuild);
     }
 
     @Subscribe

@@ -254,10 +254,46 @@ public class GoalStore {
     // Internal state shape (serialized to JSON)
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Gear goal queue (staged items — not yet planned)
+    // -------------------------------------------------------------------------
+
+    public synchronized Set<String> getGearGoals() {
+        return Collections.unmodifiableSet(state.gearGoalIds);
+    }
+
+    public synchronized boolean isGearGoal(String id) {
+        return id != null && state.gearGoalIds.contains(id);
+    }
+
+    public synchronized void addGearGoal(String id) {
+        if (id == null || id.isEmpty()) return;
+        state.gearGoalIds.add(id);
+        save();
+    }
+
+    public synchronized void removeGearGoal(String id) {
+        if (state.gearGoalIds.remove(id)) save();
+    }
+
+    public synchronized void clearAllGoals() {
+        state.relicGoals.clear();
+        state.areaGoals.clear();
+        state.pactGoals.clear();
+        state.gearGoalIds.clear();
+        save();
+    }
+
+    public synchronized int getTotalGoalCount() {
+        return state.relicGoals.size() + state.areaGoals.size()
+                + state.pactGoals.size() + state.gearGoalIds.size();
+    }
+
     private static class State {
         Set<String> relicGoals = new LinkedHashSet<>();
         Set<String> areaGoals = new LinkedHashSet<>();
         Set<String> pactGoals = new LinkedHashSet<>();
+        Set<String> gearGoalIds = new LinkedHashSet<>();
         Set<String> unlocked = new LinkedHashSet<>();
 
         // Phase 2 additions. Old goals.json files written before these fields
@@ -270,6 +306,7 @@ public class GoalStore {
             if (relicGoals == null) relicGoals = new LinkedHashSet<>();
             if (areaGoals == null) areaGoals = new LinkedHashSet<>();
             if (pactGoals == null) pactGoals = new LinkedHashSet<>();
+            if (gearGoalIds == null) gearGoalIds = new LinkedHashSet<>();
             if (unlocked == null) unlocked = new LinkedHashSet<>();
             if (selectedPactIds == null) selectedPactIds = new LinkedHashSet<>();
             // respecsUsed is a primitive int — Gson defaults it to 0 for missing fields.
