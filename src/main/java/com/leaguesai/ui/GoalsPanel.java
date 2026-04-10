@@ -54,6 +54,7 @@ public class GoalsPanel extends JPanel {
     private java.awt.Component unlockablesSlot;
 
     private Runnable onOpenChat;
+    private Runnable onBrowseBuilds;
 
     public GoalsPanel() {
         setLayout(new BorderLayout(0, 6));
@@ -162,13 +163,31 @@ public class GoalsPanel extends JPanel {
         add(scroll, BorderLayout.CENTER);
         emptyStateLabel.setVisible(true);
 
-        // ---- Bottom: heartbeat ----
+        // ---- Bottom: heartbeat + Browse Builds button ----
         heartbeatLabel = new JLabel(" ");
         heartbeatLabel.setForeground(HEARTBEAT_FG);
         heartbeatLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
         heartbeatLabel.setBorder(BorderFactory.createEmptyBorder(6, 4, 2, 4));
 
-        add(heartbeatLabel, BorderLayout.SOUTH);
+        JButton browseBuildsButton = new JButton("Browse Builds \u2197");
+        browseBuildsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        browseBuildsButton.setBackground(new Color(45, 50, 60));
+        browseBuildsButton.setForeground(new Color(160, 190, 230));
+        browseBuildsButton.setFocusPainted(false);
+        browseBuildsButton.setBorderPainted(false);
+        browseBuildsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        browseBuildsButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        browseBuildsButton.addActionListener(e -> {
+            if (onBrowseBuilds != null) onBrowseBuilds.run();
+        });
+
+        JPanel bottomPanel = new JPanel();
+        bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
+        bottomPanel.setBackground(BACKGROUND_COLOR);
+        bottomPanel.add(heartbeatLabel);
+        bottomPanel.add(browseBuildsButton);
+
+        add(bottomPanel, BorderLayout.SOUTH);
     }
 
     public void setGoal(String goal) {
@@ -231,6 +250,10 @@ public class GoalsPanel extends JPanel {
 
     public void setOnOpenChat(Runnable callback) {
         this.onOpenChat = callback;
+    }
+
+    public void setOnBrowseBuilds(Runnable callback) {
+        this.onBrowseBuilds = callback;
     }
 
     /**
