@@ -169,6 +169,32 @@ public class DatabaseLoader {
         return result;
     }
 
+    /**
+     * Loads item embeddings from the {@code items} table (if it exists).
+     * Returns a map of item id → float[] embedding. Items without an embedding
+     * are skipped. Returns empty map if the table doesn't exist or the file is missing.
+     */
+    public Map<String, float[]> loadItemEmbeddings() {
+        if (!dbFile.exists()) return Collections.emptyMap();
+        Map<String, float[]> result = new LinkedHashMap<>();
+        try (Connection conn = openConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT id, embedding FROM items WHERE embedding IS NOT NULL")) {
+            while (rs.next()) {
+                try {
+                    String id = rs.getString("id");
+                    byte[] bytes = rs.getBytes("embedding");
+                    if (id != null && bytes != null && bytes.length > 0 && bytes.length % 4 == 0) {
+                        result.put(id, bytesToFloats(bytes));
+                    }
+                } catch (Exception rowErr) { /* skip bad row */ }
+            }
+        } catch (Exception e) {
+            // Table may not exist — return empty
+        }
+        return result;
+    }
+
     // -------------------------------------------------------------------------
     // Parsers
     // -------------------------------------------------------------------------

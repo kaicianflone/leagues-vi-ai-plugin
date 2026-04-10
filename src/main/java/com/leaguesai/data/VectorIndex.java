@@ -9,9 +9,15 @@ import java.util.Map;
 public class VectorIndex {
 
     private final Map<String, float[]> vectors;
+    private final Map<String, float[]> itemVectors;
+
+    public VectorIndex(Map<String, float[]> vectors, Map<String, float[]> itemVectors) {
+        this.vectors = vectors != null ? vectors : Collections.emptyMap();
+        this.itemVectors = itemVectors != null ? itemVectors : Collections.emptyMap();
+    }
 
     public VectorIndex(Map<String, float[]> vectors) {
-        this.vectors = vectors;
+        this(vectors, Collections.emptyMap());
     }
 
     /** Returns true if no embeddings have been loaded. */
@@ -22,6 +28,11 @@ public class VectorIndex {
     /** Number of indexed vectors. */
     public int size() {
         return vectors == null ? 0 : vectors.size();
+    }
+
+    /** Number of indexed item vectors. */
+    public int getItemCount() {
+        return itemVectors.size();
     }
 
     /**
@@ -35,6 +46,31 @@ public class VectorIndex {
 
         List<Map.Entry<String, Float>> scored = new ArrayList<>();
         for (Map.Entry<String, float[]> entry : vectors.entrySet()) {
+            float sim = cosineSimilarity(query, entry.getValue());
+            scored.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), sim));
+        }
+
+        scored.sort((e1, e2) -> Float.compare(e2.getValue(), e1.getValue()));
+
+        List<String> result = new ArrayList<>();
+        int count = Math.min(limit, scored.size());
+        for (int i = 0; i < count; i++) {
+            result.add(scored.get(i).getKey());
+        }
+        return result;
+    }
+
+    /**
+     * Returns up to {@code limit} item IDs ordered by cosine similarity to the query vector,
+     * highest similarity first. Operates on the item vectors space.
+     */
+    public List<String> searchItems(float[] query, int limit) {
+        if (itemVectors.isEmpty() || query == null || query.length == 0) {
+            return Collections.emptyList();
+        }
+
+        List<Map.Entry<String, Float>> scored = new ArrayList<>();
+        for (Map.Entry<String, float[]> entry : itemVectors.entrySet()) {
             float sim = cosineSimilarity(query, entry.getValue());
             scored.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), sim));
         }
