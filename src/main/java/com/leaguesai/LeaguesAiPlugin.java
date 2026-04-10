@@ -89,6 +89,7 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile GearRepository gearRepository;
     private volatile BuildStore buildStore;
     private volatile BuildExpander buildExpander;
+    private volatile ProximityOptimizer proximityOptimizer;
 
     /**
      * Set to true at the very top of {@link #shutDown()}. Any in-flight
@@ -191,6 +192,7 @@ public class LeaguesAiPlugin extends Plugin {
             gearRepository = new GearRepository(dbFile);
             buildStore = new BuildStore(buildsFile);
             buildExpander = new BuildExpander(gearRepository, taskRepo, goalPlanner);
+            proximityOptimizer = new ProximityOptimizer();
 
             String apiKey = config.openaiApiKey();
             LlmClient previous = openAiClient;
@@ -219,6 +221,7 @@ public class LeaguesAiPlugin extends Plugin {
             usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+            chatService.setProximityOptimizer(proximityOptimizer);
             attachPlanCallback(chatService);
             coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
             // (Re)build the heartbeat ticker so it points at the new client.
@@ -309,6 +312,7 @@ public class LeaguesAiPlugin extends Plugin {
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
                         chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                        chatService.setProximityOptimizer(proximityOptimizer);
                         attachPlanCallback(chatService);
                         coachPulseService = new CoachPulseService(newClient, contextAssembler);
                         rebuildHeartbeatTicker();
@@ -488,6 +492,11 @@ public class LeaguesAiPlugin extends Plugin {
                     })
                     .collect(Collectors.toList());
 
+            // Step 3b: Relic-aware proximity reorder (post-PlannedStep pass)
+            if (proximityOptimizer != null && !steps.isEmpty()) {
+                steps = proximityOptimizer.optimize(steps, ctx, ctx.getUnlockedAreas());
+            }
+
             // Step 4: Now persist (after successful expansion)
             if (goalStore != null) {
                 goalStore.unionBuildPicks(build);
@@ -636,6 +645,7 @@ public class LeaguesAiPlugin extends Plugin {
                 openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    chatService.setProximityOptimizer(proximityOptimizer);
                     attachPlanCallback(chatService);
                     coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
                     rebuildHeartbeatTicker();
