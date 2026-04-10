@@ -21,6 +21,9 @@ public class TaskItemExtractor {
      * Matches a verb from the allowlist followed by an optional article and then
      * the item name. The item name capture stops at common prepositions, sentence
      * boundary punctuation, or end-of-input.
+     *
+     * <p>Known: optional article group may bleed into item name for single-character
+     * items (none exist in OSRS equipment, so this doesn't affect real data).
      */
     private static final Pattern ITEM_PATTERN = Pattern.compile(
         "(?i)(equip|obtain|acquire|wear|wield)" +

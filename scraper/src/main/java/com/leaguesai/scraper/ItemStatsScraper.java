@@ -31,8 +31,13 @@ import java.util.List;
 public class ItemStatsScraper {
 
     private static final String WIKI_API = "https://oldschool.runescape.wiki/api.php";
-    private static final String USER_AGENT = "leagues-vi-ai-scraper/1.0 (github.com/leagues-vi-ai)";
+    private static final String USER_AGENT = "leagues-vi-ai-scraper/1.0 (github.com/kaicianflone/leagues-vi-ai-plugin)";
 
+    /**
+     * The Cargo API normalises field names to spaces in the JSON response, so
+     * parsing uses space-separated keys (e.g. "combat attack stab") even though
+     * the request field name uses underscores (e.g. "combat_attack_stab").
+     */
     private static final String CARGO_FIELDS =
         "_pageName,slot," +
         "combat_attack_stab,combat_attack_slash,combat_attack_crush," +
@@ -76,14 +81,22 @@ public class ItemStatsScraper {
             if (!response.isSuccessful()) {
                 throw new IOException("Cargo API returned HTTP " + response.code());
             }
+            if (response.body() == null) {
+                throw new IOException("Empty response body from Cargo API");
+            }
             String body = response.body().string();
             return parseCargoResponse(body);
         }
     }
 
+    /** Safety cap: 200 pages × 500 rows = 100,000 items; far more than the wiki will ever have. */
+    private static final int MAX_PAGES = 200;
+
     /**
      * Fetches all pages until no more results. Stops when a page returns fewer
-     * rows than the requested limit (indicating the last page).
+     * rows than the requested limit (indicating the last page), or when
+     * {@link #MAX_PAGES} is reached (circuit breaker against infinite loops
+     * caused by an offset bug in the Cargo API returning 500 rows repeatedly).
      *
      * @return all equipment rows from the wiki
      * @throws IOException on HTTP or JSON parsing errors
@@ -92,9 +105,16 @@ public class ItemStatsScraper {
         List<ItemStatsRow> all = new ArrayList<>();
         int offset = 0;
         int limit = 500;
+        int pages = 0;
 
         while (true) {
+            if (pages >= MAX_PAGES) {
+                System.err.println("WARN: ItemStatsScraper hit MAX_PAGES (" + MAX_PAGES +
+                        ") — possible Cargo API offset bug. Stopping early at " + all.size() + " rows.");
+                break;
+            }
             List<ItemStatsRow> page = fetchPage(offset, limit);
+            pages++;
             all.addAll(page);
             if (page.size() < limit) {
                 break;

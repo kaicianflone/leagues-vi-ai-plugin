@@ -164,7 +164,7 @@ public class WikiScraper {
             }
         }
 
-        System.out.println("Item extraction complete.");
+        System.out.println("Task scrape complete. Item targets extracted (id=0). Run 'scrape-items' task to resolve wiki IDs and full stats.");
 
         writer.close();
 
