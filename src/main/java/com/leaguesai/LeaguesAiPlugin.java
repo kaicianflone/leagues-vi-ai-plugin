@@ -5,6 +5,7 @@ import com.leaguesai.agent.*;
 import com.leaguesai.core.monitors.*;
 import com.leaguesai.data.*;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.Build;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
@@ -28,11 +29,14 @@ import javax.inject.Inject;
 import javax.swing.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @PluginDescriptor(
@@ -80,6 +84,9 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile ChatService chatService;
     private volatile CoachPulseService coachPulseService;
     private volatile com.leaguesai.ui.HeartbeatTicker heartbeatTicker;
+    private volatile GearRepository gearRepository;
+    private volatile BuildStore buildStore;
+    private volatile BuildExpander buildExpander;
 
     /**
      * Set to true at the very top of {@link #shutDown()}. Any in-flight
@@ -171,6 +178,13 @@ public class LeaguesAiPlugin extends Plugin {
             goalStore = new GoalStore(goalsFile);
             vectorIndex = new VectorIndex(embeddings);
             goalPlanner = new GoalPlanner(taskRepo);
+
+            // Gear repository and build system
+            File buildsFile = new File(System.getProperty("user.home"),
+                ".runelite/leagues-ai/data/builds.json");
+            gearRepository = new GearRepository(dbFile);
+            buildStore = new BuildStore(buildsFile);
+            buildExpander = new BuildExpander(gearRepository, taskRepo, goalPlanner);
 
             String apiKey = config.openaiApiKey();
             LlmClient previous = openAiClient;
@@ -403,6 +417,128 @@ public class LeaguesAiPlugin extends Plugin {
             log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
                     total, withLocation, review != null);
         });
+    }
+
+    /**
+     * Activate a gear build: expand into a task plan, persist goal picks, update UI.
+     *
+     * <p>Must be called on the llmExecutor thread (not EDT). The BuildsPanel
+     * Activate button dispatches here via llmExecutor.submit().
+     *
+     * <p>Order of operations (critical — do NOT reorder):
+     * <ol>
+     *   <li>Cancel any in-flight chat plan (stale-plan race guard)</li>
+     *   <li>Expand the build (read-only — no state mutation yet)</li>
+     *   <li>If expansion throws, log + toast, leave GoalStore untouched</li>
+     *   <li>Persist goal picks (GoalStore.unionBuildPicks)</li>
+     *   <li>If steps non-empty: mirror attachPlanCallback body (panel + overlays)</li>
+     *   <li>If steps empty (goals-only): update Goals panel directly with banner</li>
+     * </ol>
+     */
+    public void activateBuild(Build build) {
+        if (build == null) return;
+        if (chatService != null) {
+            chatService.cancelPendingPlan();
+        }
+
+        try {
+            PlayerContext ctx = contextAssembler.assemble();
+
+            // Step 2: Expand first (read-only — GoalStore not touched yet)
+            CompositeGoal goal = buildExpander.expand(build, ctx);
+
+            // Step 3: Build PlannedSteps (mirrors ChatService lines 283-316 — pure transform)
+            List<Task> tasks = goal.getTaskBatch();
+            net.runelite.api.coords.WorldPoint loc = ctx.getLocation();
+            List<Task> optimized = PlannerOptimizer.optimizeOrder(
+                    tasks != null ? tasks : Collections.emptyList(), loc);
+
+            List<PlannedStep> steps = optimized.stream()
+                    .map(t -> {
+                        List<Integer> npcIds = new ArrayList<>();
+                        if (t.getTargetNpcs() != null) t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
+                        List<Integer> objIds = new ArrayList<>();
+                        if (t.getTargetObjects() != null) t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
+                        List<Integer> itemIds = new ArrayList<>();
+                        if (t.getTargetItems() != null) t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
+                        com.leaguesai.overlay.OverlayData overlayData =
+                                com.leaguesai.overlay.OverlayData.builder()
+                                        .targetTile(t.getLocation())
+                                        .targetNpcIds(npcIds)
+                                        .targetObjectIds(objIds)
+                                        .targetItemIds(itemIds)
+                                        .pathPoints(Collections.emptyList())
+                                        .widgetIds(Collections.emptyList())
+                                        .showArrow(t.getLocation() != null)
+                                        .showMinimap(t.getLocation() != null)
+                                        .showWorldMap(t.getLocation() != null)
+                                        .build();
+                        return PlannedStep.builder()
+                                .task(t)
+                                .destination(t.getLocation())
+                                .instruction(t.getName())
+                                .overlayData(overlayData)
+                                .build();
+                    })
+                    .collect(Collectors.toList());
+
+            // Step 4: Now persist (after successful expansion)
+            if (goalStore != null) {
+                goalStore.unionBuildPicks(build);
+            }
+
+            if (!steps.isEmpty()) {
+                // Step 5a: Full plan path — mirror exactly what attachPlanCallback does
+                contextAssembler.setCurrentGoal(build.getName());
+                contextAssembler.setCurrentPlan(steps);
+
+                final List<PlannedStep> finalSteps = steps;
+                final String buildName = build.getName();
+                final int total = steps.size();
+
+                if (panel != null) {
+                    panel.getGoalsPanel().setGoal(buildName);
+                    panel.getGoalsPanel().setProgress(0, total);
+                    panel.getGoalsPanel().setReviewBanner(null);
+                    panel.getGoalsPanel().setSteps(finalSteps);
+                }
+                SwingUtilities.invokeLater(() -> {
+                    if (panel != null) {
+                        panel.setStatus("Build: " + buildName);
+                        panel.setProgress(0, total);
+                        panel.switchToGoalsTab();
+                    }
+                    PlannedStep first = finalSteps.get(0);
+                    if (first != null && overlayController != null) {
+                        overlayController.setActiveStep(first);
+                    }
+                });
+                log.info("activateBuild: activated '{}' with {} steps", buildName, total);
+            } else {
+                // Step 5b: Goals-only path — direct panel update, NO onPlanCreated
+                final String buildName = build.getName();
+                SwingUtilities.invokeLater(() -> {
+                    if (panel != null && panel.getGoalsPanel() != null) {
+                        panel.getGoalsPanel().setGoal(buildName);
+                        // Show a banner so user knows gear chain is pending
+                        panel.getGoalsPanel().setReviewBanner(
+                            "Goals set — gear task chain will activate on launch-day scrape");
+                        panel.switchToGoalsTab();
+                    }
+                });
+                log.info("activateBuild: goals-only mode for build '{}'", build.getName());
+            }
+
+        } catch (Exception e) {
+            log.error("activateBuild failed for build '{}': {}",
+                      build.getName(), e.getMessage(), e);
+            // Do NOT touch GoalStore — leave it untouched on error
+            SwingUtilities.invokeLater(() -> {
+                if (panel != null) {
+                    panel.setStatus("Build activation failed: " + e.getMessage());
+                }
+            });
+        }
     }
 
     /**

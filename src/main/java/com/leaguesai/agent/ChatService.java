@@ -144,6 +144,16 @@ public class ChatService {
     }
 
     /**
+     * Atomically invalidates any in-flight plan resolution (increments the
+     * generation counter). Called by {@code LeaguesAiPlugin.activateBuild}
+     * before firing a build-driven plan, so a stale chat plan cannot overwrite
+     * the build plan via the shared {@code onPlanCreated} callback.
+     */
+    public void cancelPendingPlan() {
+        planGeneration.incrementAndGet();
+    }
+
+    /**
      * Clear the conversation history.
      */
     public void clearHistory() {
