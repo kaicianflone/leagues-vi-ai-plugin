@@ -14,8 +14,7 @@ import java.util.Map;
  *
  * <p>Usage: {@code WikiScraper <openai-api-key> <output-db-path>}
  *
- * <p>Scrapes OSRS Wiki league task pages (currently targeting Leagues V /
- * Trailblazer Reloaded — URLs will be swapped to Leagues VI on launch day),
+ * <p>Scrapes OSRS Wiki league task pages for Demonic Pacts League (Leagues VI),
  * normalises each row, optionally resolves tile coordinates, generates an
  * OpenAI embedding, and upserts everything into a local SQLite database.
  */
@@ -23,10 +22,8 @@ public class WikiScraper {
 
     private static final String WIKI_BASE = "https://oldschool.runescape.wiki/w/";
 
-    // Leagues V placeholder pages — swap paths for Leagues VI on launch day.
-    // The Trailblazer Reloaded wiki uses a single tasks page with all areas.
     private static final String[] TASK_PAGES = {
-        "Trailblazer_Reloaded_League/Tasks",
+        "Demonic_Pacts_League/Tasks",
     };
 
     /** Rate-limit delay between embedding API calls (milliseconds). */
