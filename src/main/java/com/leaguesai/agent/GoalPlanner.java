@@ -148,6 +148,55 @@ public class GoalPlanner {
     public CompositeGoal resolveCompositeGoal(GoalSpec spec, PlayerContext ctx) {
         Objects.requireNonNull(spec, "GoalSpec must not be null");
 
+        // BUILD goals: multi-terminal DAG, no gap-closing.
+        // Each terminal task ID is a gear-reward task. Build the prereq DAG
+        // backward from all terminals, topo-sort, return the ordered chain.
+        if (spec.getType() == GoalType.BUILD) {
+            Set<String> terminalIds = spec.getTerminalTaskIds();
+            if (terminalIds == null || terminalIds.isEmpty()) {
+                // Goals-only build: no gear tasks found — return empty batch
+                // so BuildExpander can detect goals-only mode.
+                return CompositeGoal.builder()
+                        .root(spec)
+                        .pointsGap(0)
+                        .coveredBy(0)
+                        .reachable(true)
+                        .build();
+            }
+
+            // Resolve terminal task IDs to Task objects
+            List<Task> terminals = new ArrayList<>();
+            for (String id : terminalIds) {
+                Task t = taskRepo.getById(id);
+                if (t != null) terminals.add(t);
+            }
+
+            if (terminals.isEmpty()) {
+                return CompositeGoal.builder()
+                        .root(spec)
+                        .pointsGap(0)
+                        .coveredBy(0)
+                        .reachable(true)
+                        .build();
+            }
+
+            Set<String> completed = ctx != null && ctx.getCompletedTasks() != null
+                    ? ctx.getCompletedTasks() : Collections.emptySet();
+            List<Task> dag = buildDag(terminals, completed);
+            List<Task> sorted = topologicalSort(dag);
+
+            log.info("BUILD goal '{}': {} terminal tasks, {} total after DAG expansion",
+                    spec.getRawPhrase(), terminals.size(), sorted.size());
+
+            return CompositeGoal.builder()
+                    .root(spec)
+                    .taskBatch(sorted)
+                    .pointsGap(0)
+                    .coveredBy(0)
+                    .reachable(true)
+                    .build();
+        }
+
         // Pact goals: nothing to plan. Echo back as reachable with an empty
         // batch. ChatService fires the callback so the UI shows the goal and
         // the LLM can talk about the pact via prompt context.

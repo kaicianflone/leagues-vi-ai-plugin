@@ -204,4 +204,119 @@ public class GoalPlannerTest {
         assertEquals(1, r3.size());
         assertEquals("A", r3.get(0).getId());
     }
+
+    // ---------------------------------------------------------------
+    // BUILD goal branch tests
+    // ---------------------------------------------------------------
+
+    @Test
+    public void build_goal_with_terminals_returns_sorted_dag() {
+        // Terminal is B (which requires A as a prereq)
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.BUILD)
+                .rawPhrase("build my setup")
+                .terminalTaskIds(Collections.singleton("B"))
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue("BUILD goal should be reachable", result.isReachable());
+        assertEquals("pointsGap should be 0", 0, result.getPointsGap());
+
+        List<Task> batch = result.getTaskBatch();
+        assertNotNull(batch);
+        assertEquals("Batch should contain terminal + prereq", 2, batch.size());
+
+        List<String> ids = new ArrayList<>();
+        for (Task t : batch) ids.add(t.getId());
+        assertTrue("Batch must contain A", ids.contains("A"));
+        assertTrue("Batch must contain B", ids.contains("B"));
+
+        // A must appear before B (prereq before dependent)
+        assertTrue("A must come before B in topo order", ids.indexOf("A") < ids.indexOf("B"));
+    }
+
+    @Test
+    public void build_goal_empty_terminals_returns_goals_only() {
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.BUILD)
+                .rawPhrase("build with no gear")
+                .terminalTaskIds(Collections.emptySet())
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue("Should be reachable (goals-only mode)", result.isReachable());
+        assertTrue("taskBatch should be empty for goals-only build",
+                result.getTaskBatch().isEmpty());
+        assertEquals(0, result.getPointsGap());
+    }
+
+    @Test
+    public void build_goal_null_terminals_returns_goals_only() {
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.BUILD)
+                .rawPhrase("build null terminals")
+                .terminalTaskIds(null)
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue("Should be reachable (goals-only mode)", result.isReachable());
+        assertTrue("taskBatch should be empty for null-terminal build",
+                result.getTaskBatch().isEmpty());
+        assertEquals(0, result.getPointsGap());
+    }
+
+    @Test
+    public void build_goal_does_not_run_gap_closing() {
+        // Configure repo to throw if getAllTasks() is called — proving the gap-closing
+        // path (filterAchievableTasks) never runs for BUILD goals.
+        when(taskRepo.getAllTasks()).thenThrow(new RuntimeException("getAllTasks must not be called for BUILD goals"));
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.BUILD)
+                .rawPhrase("build test no gap closing")
+                .terminalTaskIds(Collections.singleton("D"))
+                .build();
+
+        // Should NOT throw — gap-closing path is skipped entirely for BUILD
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+
+        List<String> ids = new ArrayList<>();
+        for (Task t : result.getTaskBatch()) ids.add(t.getId());
+        assertTrue("Batch should only contain the terminal (D has no prereqs)", ids.contains("D"));
+        assertEquals("Batch should have exactly 1 task", 1, ids.size());
+    }
+
+    @Test
+    public void build_goal_skips_completed_terminals() {
+        // Terminal B requires A; mark A as completed — A should not appear in batch
+        PlayerContext ctx = PlayerContext.builder()
+                .completedTasks(Collections.singleton("A"))
+                .build();
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.BUILD)
+                .rawPhrase("build with completed prereq")
+                .terminalTaskIds(Collections.singleton("B"))
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, ctx);
+
+        assertNotNull(result);
+        assertTrue("Should be reachable", result.isReachable());
+
+        List<String> ids = new ArrayList<>();
+        for (Task t : result.getTaskBatch()) ids.add(t.getId());
+        assertFalse("Completed task A should not appear in batch", ids.contains("A"));
+        assertTrue("Terminal B should still be in batch", ids.contains("B"));
+        assertEquals("Batch should contain only B", 1, ids.size());
+    }
 }
