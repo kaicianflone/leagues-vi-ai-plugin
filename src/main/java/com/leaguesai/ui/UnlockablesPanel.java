@@ -82,6 +82,7 @@ public class UnlockablesPanel extends JPanel {
     private GearRepository gearRepo;
 
     private Consumer<String> onSetGoal;
+    private Consumer<GearItem> onSetGearGoal;
 
     /**
      * Tracks which collapsible sections were open before the last rebuild so
@@ -113,6 +114,11 @@ public class UnlockablesPanel extends JPanel {
     public void setGearRepository(GearRepository repo) {
         this.gearRepo = repo;
         rebuild();
+    }
+
+    /** Callback fired when the user clicks "Set as goal" on a gear item. */
+    public void setOnSetGearGoal(Consumer<GearItem> callback) {
+        this.onSetGearGoal = callback;
     }
 
     /**
@@ -291,8 +297,7 @@ public class UnlockablesPanel extends JPanel {
             JPanel grp = slotGroups.get(item.getSlot());
             if (grp == null) continue;
             String skillMeta = buildSkillMeta(item);
-            String goalPhrase = "equip " + item.getName();
-            grp.add(makeRow(item.getName(), skillMeta, false, goalPhrase));
+            grp.add(makeGearRow(item, skillMeta));
             count++;
         }
 
@@ -309,6 +314,52 @@ public class UnlockablesPanel extends JPanel {
         }
 
         return buildCollapsible("Gear (" + count + ")", child);
+    }
+
+    private JPanel makeGearRow(GearItem item, String meta) {
+        JPanel row = new JPanel(new BorderLayout(4, 0));
+        row.setBackground(ROW_BG);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER),
+                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+
+        JPanel right = new JPanel();
+        right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
+        right.setOpaque(false);
+        right.setPreferredSize(new Dimension(60, 30));
+
+        JLabel setGoalLink = new JLabel("Set as goal", SwingConstants.RIGHT);
+        setGoalLink.setForeground(BUTTON_FG);
+        setGoalLink.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        setGoalLink.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        setGoalLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        setGoalLink.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (onSetGearGoal != null) onSetGearGoal.accept(item);
+            }
+        });
+
+        right.add(setGoalLink);
+
+        String safeTitle = escapeHtml(item.getName());
+        String safeMeta = escapeHtml(meta);
+        JLabel textLabel = new JLabel(
+                "<html><div style='width:130px'>"
+                        + "<b style='color:#DCDCDC'>" + safeTitle + "</b>"
+                        + (safeMeta.isEmpty()
+                                ? ""
+                                : "<br><span style='color:#969696;font-size:9px'>" + safeMeta + "</span>")
+                        + "</div></html>");
+        textLabel.setForeground(HEADER_FG);
+        textLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        textLabel.setVerticalAlignment(SwingConstants.TOP);
+
+        row.add(textLabel, BorderLayout.CENTER);
+        row.add(right, BorderLayout.EAST);
+        return row;
     }
 
     private static String slotDisplayName(GearSlot slot) {

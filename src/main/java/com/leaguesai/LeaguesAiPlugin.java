@@ -252,6 +252,7 @@ public class LeaguesAiPlugin extends Plugin {
                 UnlockablesPanel unlock = new UnlockablesPanel(taskRepo, gs);
                 if (gearRepository != null) unlock.setGearRepository(gearRepository);
                 unlock.setOnSetGoal(this::handleUnlockableGoalClick);
+                unlock.setOnSetGearGoal(item -> llmExecutor.submit(() -> activateGearGoal(item)));
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
             });
 
@@ -431,6 +432,32 @@ public class LeaguesAiPlugin extends Plugin {
                     panel.getBuildsPanel().showToast("Save failed: " + ex.getMessage());
                 }
             });
+        }
+    }
+
+    /**
+     * Build a minimal single-item Build from a gear item and activate it through
+     * the same BuildExpander path used for full builds. Called on llmExecutor.
+     */
+    private void activateGearGoal(com.leaguesai.data.model.GearItem item) {
+        if (item == null) return;
+        com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
+                .id("gear_goal_" + item.getId())
+                .name("Equip " + item.getName())
+                .gear(item.getSlot() != null
+                        ? java.util.Collections.singletonMap(item.getSlot(), item.getId())
+                        : java.util.Collections.emptyMap())
+                .relicIds(java.util.Collections.emptySet())
+                .areaIds(java.util.Collections.emptySet())
+                .pactIds(java.util.Collections.emptySet())
+                .build();
+        boolean ok = activateBuild(build);
+        if (ok) {
+            SwingUtilities.invokeLater(() -> panel.switchToGoalsTab());
+        } else {
+            SwingUtilities.invokeLater(() ->
+                panel.getChatPanel().showError(
+                    "No tasks found for \"" + item.getName() + "\" yet — re-run the scraper on launch day."));
         }
     }
 
