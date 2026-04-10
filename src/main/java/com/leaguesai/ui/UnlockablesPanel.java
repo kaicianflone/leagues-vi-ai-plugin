@@ -1,8 +1,11 @@
 package com.leaguesai.ui;
 
+import com.leaguesai.data.GearRepository;
 import com.leaguesai.data.GoalStore;
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.GearItem;
+import com.leaguesai.data.model.GearSlot;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 
@@ -76,6 +79,7 @@ public class UnlockablesPanel extends JPanel {
 
     private final TaskRepository repo;
     private final GoalStore goalStore;
+    private GearRepository gearRepo;
 
     private Consumer<String> onSetGoal;
 
@@ -105,6 +109,12 @@ public class UnlockablesPanel extends JPanel {
         this.onSetGoal = callback;
     }
 
+    /** Provide gear data for the Gear accordion section. Call before or after construction; triggers a rebuild. */
+    public void setGearRepository(GearRepository repo) {
+        this.gearRepo = repo;
+        rebuild();
+    }
+
     /**
      * Rebuild all three sections from the repo. Called once at construction;
      * can be called again after the scraper has been re-run to refresh the
@@ -116,6 +126,7 @@ public class UnlockablesPanel extends JPanel {
             JPanel relicsSection = buildRelicsSection();
             JPanel areasSection = buildAreasSection();
             JPanel pactsSection = buildPactsSection();
+            JPanel gearSection  = buildGearSection();
 
             // Every child in a BoxLayout.Y_AXIS parent must have LEFT
             // alignmentX, otherwise Swing centers rows against the widest
@@ -123,12 +134,15 @@ public class UnlockablesPanel extends JPanel {
             relicsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
             areasSection.setAlignmentX(Component.LEFT_ALIGNMENT);
             pactsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+            gearSection.setAlignmentX(Component.LEFT_ALIGNMENT);
 
             add(relicsSection);
             add(leftAlignedStrut(4));
             add(areasSection);
             add(leftAlignedStrut(4));
             add(pactsSection);
+            add(leftAlignedStrut(4));
+            add(gearSection);
             revalidate();
             repaint();
         });
@@ -260,6 +274,58 @@ public class UnlockablesPanel extends JPanel {
                 + selected + "/" + GoalStore.MAX_PACT_SLOTS
                 + " \u2022 respecs: " + remainingRespecs + ")";
         return buildCollapsible(title, child);
+    }
+
+    private JPanel buildGearSection() {
+        List<GearItem> items = gearRepo != null ? gearRepo.listAll() : java.util.Collections.emptyList();
+
+        // Group by slot in enum declaration order.
+        Map<GearSlot, JPanel> slotGroups = new java.util.LinkedHashMap<>();
+        for (GearSlot slot : GearSlot.values()) {
+            slotGroups.put(slot, newGroupPanel(slotDisplayName(slot)));
+        }
+
+        int count = 0;
+        for (GearItem item : items) {
+            if (item.getSlot() == null) continue;
+            JPanel grp = slotGroups.get(item.getSlot());
+            if (grp == null) continue;
+            String skillMeta = buildSkillMeta(item);
+            String goalPhrase = "equip " + item.getName();
+            grp.add(makeRow(item.getName(), skillMeta, false, goalPhrase));
+            count++;
+        }
+
+        JPanel child = newChildColumn();
+        for (Map.Entry<GearSlot, JPanel> entry : slotGroups.entrySet()) {
+            // Skip empty slot groups (no items loaded for this slot).
+            if (entry.getValue().getComponentCount() > 1) {
+                child.add(entry.getValue());
+                child.add(leftAlignedStrut(2));
+            }
+        }
+        if (items.isEmpty()) {
+            child.add(emptyLabel("No gear loaded — run scraper."));
+        }
+
+        return buildCollapsible("Gear (" + count + ")", child);
+    }
+
+    private static String slotDisplayName(GearSlot slot) {
+        String raw = slot.name();
+        return Character.toUpperCase(raw.charAt(0)) + raw.substring(1).toLowerCase();
+    }
+
+    private static String buildSkillMeta(GearItem item) {
+        if (item.getSkillRequirements() == null || item.getSkillRequirements().isEmpty()) {
+            return item.getSlot() != null ? slotDisplayName(item.getSlot()) : "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Integer> req : item.getSkillRequirements().entrySet()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(req.getKey()).append(" ").append(req.getValue());
+        }
+        return sb.toString();
     }
 
     private static String capitalize(String s) {

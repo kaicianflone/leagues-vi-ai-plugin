@@ -250,6 +250,7 @@ public class LeaguesAiPlugin extends Plugin {
             final GoalStore gs = goalStore;
             SwingUtilities.invokeLater(() -> {
                 UnlockablesPanel unlock = new UnlockablesPanel(taskRepo, gs);
+                if (gearRepository != null) unlock.setGearRepository(gearRepository);
                 unlock.setOnSetGoal(this::handleUnlockableGoalClick);
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
             });
@@ -386,6 +387,51 @@ public class LeaguesAiPlugin extends Plugin {
                 });
             }
         });
+    }
+
+    /**
+     * Snapshot the current GoalStore picks into a new named Build and persist it.
+     * Called from BuildsPanel's "Save current as build" button.
+     */
+    private void saveCurrentAsBuild(String name) {
+        if (buildStore == null || goalStore == null) {
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().showToast("Not ready — try again in a moment.");
+                }
+            });
+            return;
+        }
+        String slug = name.toLowerCase().replaceAll("[^a-z0-9]+", "_");
+        // Make the slug unique if a build with that id already exists.
+        boolean idTaken = buildStore.listAll().stream().anyMatch(b -> slug.equals(b.getId()));
+        String finalSlug = idTaken ? slug + "_" + System.currentTimeMillis() : slug;
+        com.leaguesai.data.model.Build build = com.leaguesai.data.model.Build.builder()
+                .id(finalSlug)
+                .name(name)
+                .author(System.getProperty("user.name", "me"))
+                .version(1)
+                .relicIds(new java.util.HashSet<>(goalStore.getRelicGoals()))
+                .areaIds(new java.util.HashSet<>(goalStore.getAreaGoals()))
+                .pactIds(new java.util.HashSet<>(goalStore.getPactGoals()))
+                .build();
+        try {
+            buildStore.save(build);
+            log.info("Saved build '{}' (id={})", name, finalSlug);
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().refreshBuilds(buildStore);
+                    panel.getBuildsPanel().showToast("Build \"" + name + "\" saved.");
+                }
+            });
+        } catch (Exception ex) {
+            log.error("Failed to save build '{}'", name, ex);
+            SwingUtilities.invokeLater(() -> {
+                if (panel.getBuildsPanel() != null) {
+                    panel.getBuildsPanel().showToast("Save failed: " + ex.getMessage());
+                }
+            });
+        }
     }
 
     /**
@@ -680,6 +726,8 @@ public class LeaguesAiPlugin extends Plugin {
         if (panel.getBuildsPanel() != null) {
             BuildsPanel bp = panel.getBuildsPanel();
 
+            bp.setOnBackToGoals(() -> panel.switchToGoalsTab());
+
             bp.setOnActivate(build -> {
                 // Called on background thread from BuildsPanel's internal executor
                 boolean ok = activateBuild(build);
@@ -723,6 +771,8 @@ public class LeaguesAiPlugin extends Plugin {
                     }
                 });
             });
+
+            bp.setOnSaveAsBuild(name -> saveCurrentAsBuild(name));
 
             // Initial load — buildStore may still be null here (loaded async);
             // refreshBuilds handles null gracefully.

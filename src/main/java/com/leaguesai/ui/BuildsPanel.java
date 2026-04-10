@@ -38,6 +38,7 @@ public class BuildsPanel extends JPanel {
     private Consumer<Build> onActivate;
     private Consumer<Build> onExport;
     private Runnable onImport;
+    private Consumer<String> onSaveAsBuild;
 
     // Sub-tabs
     private JButton templatesTabButton;
@@ -173,6 +174,11 @@ public class BuildsPanel extends JPanel {
         this.onImport = r;
     }
 
+    /** Called when user saves the current goal selections as a new build. Argument is the build name entered by the user. */
+    public void setOnSaveAsBuild(Consumer<String> callback) {
+        this.onSaveAsBuild = callback;
+    }
+
     /** Shut down the internal executor. Call from plugin shutDown(). */
     public void shutdown() {
         executor.shutdownNow();
@@ -236,6 +242,22 @@ public class BuildsPanel extends JPanel {
                 cardListPanel.add(createBuildCard(build));
                 cardListPanel.add(Box.createVerticalStrut(4));
             }
+        }
+
+        // Saved tab: footer button to snapshot current GoalStore picks as a new build.
+        if (!showingTemplates) {
+            cardListPanel.add(Box.createVerticalStrut(8));
+            JButton saveBtn = createActionButton("Save current as build");
+            saveBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
+            saveBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+            saveBtn.addActionListener(e -> {
+                String name = JOptionPane.showInputDialog(
+                        BuildsPanel.this, "Build name:", "Save build", JOptionPane.PLAIN_MESSAGE);
+                if (name != null && !name.trim().isEmpty()) {
+                    if (onSaveAsBuild != null) onSaveAsBuild.accept(name.trim());
+                }
+            });
+            cardListPanel.add(saveBtn);
         }
 
         cardListPanel.revalidate();
