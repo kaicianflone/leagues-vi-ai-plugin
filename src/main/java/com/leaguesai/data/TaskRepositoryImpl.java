@@ -216,6 +216,19 @@ public class TaskRepositoryImpl implements TaskRepository {
     }
 
     @Override
+    public List<Task> findByTargetItemId(int wikiItemId) {
+        // Search in-memory tasks list — target_items is already loaded into Task.targetItems
+        // by DatabaseLoader. Filter tasks whose targetItems list contains the given id.
+        // Integer comparison on already-parsed int fields means no LIKE prefix-collision
+        // (e.g. id 657 cannot accidentally match id 6570).
+        return tasksById.values().stream()
+                .filter(task -> task.getTargetItems() != null &&
+                        task.getTargetItems().stream()
+                                .anyMatch(it -> it.getId() == wikiItemId))
+                .collect(Collectors.toList());
+    }
+
+    @Override
     public Optional<Pact> findPactByName(String name) {
         if (name == null || name.isEmpty()) return Optional.empty();
         String needle = name.toLowerCase();

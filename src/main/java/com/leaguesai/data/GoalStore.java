@@ -3,6 +3,7 @@ package com.leaguesai.data;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
+import com.leaguesai.data.model.Build;
 
 import java.io.File;
 import java.io.IOException;
@@ -113,6 +114,25 @@ public class GoalStore {
 
     public synchronized void removePactGoal(String id) {
         if (state.pactGoals.remove(id)) save();
+    }
+
+    /**
+     * Merges a {@link Build}'s relic / area / pact id sets into the corresponding
+     * goal-target sets. This is a union operation — existing goals are preserved.
+     *
+     * <p><strong>Does NOT touch {@code selectedPactIds}.</strong> Merging a build
+     * into goals never burns a respec or commits the player to a pact allocation;
+     * those are separate UI actions.
+     *
+     * <p>Calls {@link #save()} exactly once at the end, regardless of how many
+     * sets changed, so there is no window where only some sets have been written.
+     */
+    public synchronized void unionBuildPicks(Build build) {
+        if (build == null) return;
+        if (build.getRelicIds() != null) state.relicGoals.addAll(build.getRelicIds());
+        if (build.getAreaIds() != null) state.areaGoals.addAll(build.getAreaIds());
+        if (build.getPactIds() != null) state.pactGoals.addAll(build.getPactIds());
+        save();  // ONE save at the end
     }
 
     public synchronized void markUnlocked(String id) {
