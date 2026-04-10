@@ -159,18 +159,26 @@ public class GoalsPanel extends JPanel {
         saveGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         saveGoalsButton.addActionListener(e -> { if (onSaveGoalsAsBuild != null) onSaveGoalsAsBuild.run(); });
 
-        JPanel goalQueueButtons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 0));
+        // Label row
+        JPanel goalQueueLabelRow = new JPanel(new BorderLayout());
+        goalQueueLabelRow.setOpaque(false);
+        goalQueueLabelRow.add(goalQueueLabel, BorderLayout.WEST);
+
+        // Buttons row — equal-width side-by-side
+        JPanel goalQueueButtons = new JPanel(new java.awt.GridLayout(1, 2, 4, 0));
         goalQueueButtons.setOpaque(false);
         goalQueueButtons.add(saveGoalsButton);
         goalQueueButtons.add(planGoalsButton);
 
-        goalQueuePanel = new JPanel(new BorderLayout(4, 0));
+        goalQueuePanel = new JPanel();
+        goalQueuePanel.setLayout(new BoxLayout(goalQueuePanel, BoxLayout.Y_AXIS));
         goalQueuePanel.setBackground(GOAL_QUEUE_BG);
         goalQueuePanel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(60, 90, 60)),
-                BorderFactory.createEmptyBorder(4, 8, 4, 4)));
-        goalQueuePanel.add(goalQueueLabel, BorderLayout.WEST);
-        goalQueuePanel.add(goalQueueButtons, BorderLayout.EAST);
+                BorderFactory.createEmptyBorder(4, 8, 4, 8)));
+        goalQueuePanel.add(goalQueueLabelRow);
+        goalQueuePanel.add(javax.swing.Box.createVerticalStrut(4));
+        goalQueuePanel.add(goalQueueButtons);
         goalQueuePanel.setVisible(false);
 
         // ---- Center: single scroll column holding [top block, unlockables
