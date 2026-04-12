@@ -333,6 +333,7 @@ public class LeaguesAiPlugin extends Plugin {
                         chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
                         chatService.setItemDependencyGraph(this.itemDependencyGraph);
                         chatService.setProximityOptimizer(proximityOptimizer);
+                        chatService.setHistoryStore(chatHistoryStore);
                         attachPlanCallback(chatService);
                         coachPulseService = new CoachPulseService(newClient, contextAssembler);
                         rebuildHeartbeatTicker();
@@ -771,14 +772,12 @@ public class LeaguesAiPlugin extends Plugin {
                 final String buildName = build.getName();
                 final int total = steps.size();
 
-                if (panel != null) {
-                    panel.getGoalsPanel().setGoal(buildName);
-                    panel.getGoalsPanel().setProgress(0, total);
-                    panel.getGoalsPanel().setReviewBanner(null);
-                    panel.getGoalsPanel().setSteps(finalSteps);
-                }
                 SwingUtilities.invokeLater(() -> {
                     if (panel != null) {
+                        panel.getGoalsPanel().setGoal(buildName);
+                        panel.getGoalsPanel().setProgress(0, total);
+                        panel.getGoalsPanel().setReviewBanner(null);
+                        panel.getGoalsPanel().setSteps(finalSteps);
                         panel.setStatus("Build: " + buildName);
                         panel.setProgress(0, total);
                         panel.switchToGoalsTab();
@@ -915,6 +914,7 @@ public class LeaguesAiPlugin extends Plugin {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
                     chatService.setItemDependencyGraph(this.itemDependencyGraph);
                     chatService.setProximityOptimizer(proximityOptimizer);
+                    chatService.setHistoryStore(chatHistoryStore);
                     attachPlanCallback(chatService);
                     coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
                     rebuildHeartbeatTicker();

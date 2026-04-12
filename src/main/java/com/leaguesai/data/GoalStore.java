@@ -309,6 +309,8 @@ public class GoalStore {
         state.areaGoals.clear();
         state.pactGoals.clear();
         state.gearGoalIds.clear();
+        state.currentGoalText = null;
+        state.currentPlanTaskIds = null;
         save();
     }
 

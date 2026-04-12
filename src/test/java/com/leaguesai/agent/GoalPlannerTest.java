@@ -2,6 +2,7 @@ package com.leaguesai.agent;
 
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.model.Difficulty;
+import com.leaguesai.data.model.ItemDependency;
 import com.leaguesai.data.model.Task;
 import org.junit.Before;
 import org.junit.Test;
@@ -318,5 +319,189 @@ public class GoalPlannerTest {
         assertFalse("Completed task A should not appear in batch", ids.contains("A"));
         assertTrue("Terminal B should still be in batch", ids.contains("B"));
         assertEquals("Batch should contain only B", 1, ids.size());
+    }
+
+    // -------------------------------------------------------------------------
+    // GoalType.ITEM path
+    // -------------------------------------------------------------------------
+
+    private static ItemDependencyGraph buildGraphWith(ItemDependency... deps) {
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+        return graph;
+    }
+
+    @Test
+    public void item_goal_null_graph_returns_empty_reachable() {
+        // planner constructed with null graph (default setUp)
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId("rune_platebody")
+                .targetName("Rune platebody")
+                .rawPhrase("get rune platebody")
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue("Should be reachable (LLM fallback path)", result.isReachable());
+        assertTrue("Batch should be empty when graph is null",
+                result.getTaskBatch() == null || result.getTaskBatch().isEmpty());
+    }
+
+    @Test
+    public void item_goal_null_targetId_returns_empty_reachable() {
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId(null)
+                .rawPhrase("get something")
+                .build();
+
+        CompositeGoal result = planner.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+    }
+
+    @Test
+    public void item_goal_empty_graph_returns_empty_reachable() {
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(true);
+        GoalPlanner plannerWithGraph = new GoalPlanner(taskRepo, graph);
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId("rune_platebody")
+                .targetName("Rune platebody")
+                .rawPhrase("get rune platebody")
+                .build();
+
+        CompositeGoal result = plannerWithGraph.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+        assertTrue("Batch should be empty when graph is empty",
+                result.getTaskBatch() == null || result.getTaskBatch().isEmpty());
+    }
+
+    @Test
+    public void item_goal_with_matching_task_populates_batch() {
+        // Build a task that has rune platebody as a target item
+        Task platebodyTask = Task.builder()
+                .id("smith_rune_plate")
+                .name("Smith a rune platebody")
+                .difficulty(Difficulty.MEDIUM)
+                .area("Misthalin")
+                .tasksRequired(Collections.emptyList())
+                .targetItems(Collections.singletonList(
+                        Task.ItemTarget.builder().id(2615).name("Rune platebody").build()))
+                .build();
+
+        ItemDependency plateDep = ItemDependency.builder()
+                .itemId("rune_platebody")
+                .itemName("Rune platebody")
+                .obtainMethod(ObtainMethod.SMITHED)
+                .sourceId("runite_bar")
+                .sourceName("Runite bar")
+                .skillRequired("Smithing")
+                .skillLevel(99)
+                .qtyNeeded(5)
+                .build();
+
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+        when(graph.expand("rune_platebody")).thenReturn(Collections.singletonList(plateDep));
+        when(taskRepo.getAllTasks()).thenReturn(Collections.singletonList(platebodyTask));
+
+        GoalPlanner plannerWithGraph = new GoalPlanner(taskRepo, graph);
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId("rune_platebody")
+                .targetName("Rune platebody")
+                .rawPhrase("get rune platebody")
+                .build();
+
+        CompositeGoal result = plannerWithGraph.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+        assertNotNull(result.getTaskBatch());
+        assertFalse("Batch should contain the smithing task", result.getTaskBatch().isEmpty());
+        assertEquals("smith_rune_plate", result.getTaskBatch().get(0).getId());
+    }
+
+    @Test
+    public void item_goal_skips_completed_tasks() {
+        Task platebodyTask = Task.builder()
+                .id("smith_rune_plate")
+                .name("Smith a rune platebody")
+                .difficulty(Difficulty.MEDIUM)
+                .area("Misthalin")
+                .tasksRequired(Collections.emptyList())
+                .targetItems(Collections.singletonList(
+                        Task.ItemTarget.builder().id(2615).name("Rune platebody").build()))
+                .build();
+
+        ItemDependency plateDep = ItemDependency.builder()
+                .itemId("rune_platebody")
+                .itemName("Rune platebody")
+                .obtainMethod(ObtainMethod.SMITHED)
+                .build();
+
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+        when(graph.expand("rune_platebody")).thenReturn(Collections.singletonList(plateDep));
+        when(taskRepo.getAllTasks()).thenReturn(Collections.singletonList(platebodyTask));
+
+        GoalPlanner plannerWithGraph = new GoalPlanner(taskRepo, graph);
+
+        PlayerContext ctx = PlayerContext.builder()
+                .completedTasks(Collections.singleton("smith_rune_plate"))
+                .build();
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId("rune_platebody")
+                .targetName("Rune platebody")
+                .rawPhrase("get rune platebody")
+                .build();
+
+        CompositeGoal result = plannerWithGraph.resolveCompositeGoal(spec, ctx);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+        assertTrue("Completed task should be excluded from batch",
+                result.getTaskBatch() == null || result.getTaskBatch().isEmpty());
+    }
+
+    @Test
+    public void item_goal_no_matching_tasks_returns_empty_reachable() {
+        ItemDependency plateDep = ItemDependency.builder()
+                .itemId("rune_platebody")
+                .itemName("Rune platebody")
+                .obtainMethod(ObtainMethod.SMITHED)
+                .build();
+
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+        when(graph.expand("rune_platebody")).thenReturn(Collections.singletonList(plateDep));
+        when(taskRepo.getAllTasks()).thenReturn(Collections.emptyList());
+
+        GoalPlanner plannerWithGraph = new GoalPlanner(taskRepo, graph);
+
+        GoalSpec spec = GoalSpec.builder()
+                .type(GoalType.ITEM)
+                .targetId("rune_platebody")
+                .targetName("Rune platebody")
+                .rawPhrase("get rune platebody")
+                .build();
+
+        CompositeGoal result = plannerWithGraph.resolveCompositeGoal(spec, null);
+
+        assertNotNull(result);
+        assertTrue(result.isReachable());
+        assertTrue("Batch should be empty when no tasks match",
+                result.getTaskBatch() == null || result.getTaskBatch().isEmpty());
     }
 }
