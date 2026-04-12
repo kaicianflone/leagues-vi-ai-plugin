@@ -3,6 +3,7 @@ package com.leaguesai.data;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
+import com.leaguesai.data.model.Build;
 
 import java.io.File;
 import java.io.IOException;
@@ -10,8 +11,10 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -115,6 +118,25 @@ public class GoalStore {
         if (state.pactGoals.remove(id)) save();
     }
 
+    /**
+     * Merges a {@link Build}'s relic / area / pact id sets into the corresponding
+     * goal-target sets. This is a union operation — existing goals are preserved.
+     *
+     * <p><strong>Does NOT touch {@code selectedPactIds}.</strong> Merging a build
+     * into goals never burns a respec or commits the player to a pact allocation;
+     * those are separate UI actions.
+     *
+     * <p>Calls {@link #save()} exactly once at the end, regardless of how many
+     * sets changed, so there is no window where only some sets have been written.
+     */
+    public synchronized void unionBuildPicks(Build build) {
+        if (build == null) return;
+        if (build.getRelicIds() != null) state.relicGoals.addAll(build.getRelicIds());
+        if (build.getAreaIds() != null) state.areaGoals.addAll(build.getAreaIds());
+        if (build.getPactIds() != null) state.pactGoals.addAll(build.getPactIds());
+        save();  // ONE save at the end
+    }
+
     public synchronized void markUnlocked(String id) {
         if (id == null || id.isEmpty()) return;
         if (state.unlocked.add(id)) save();
@@ -195,6 +217,32 @@ public class GoalStore {
     }
 
     // -------------------------------------------------------------------------
+    // Session plan persistence (goal text + ordered task IDs)
+    // -------------------------------------------------------------------------
+
+    public synchronized void saveCurrentPlan(String goalText, List<String> taskIds) {
+        state.currentGoalText = goalText;
+        state.currentPlanTaskIds = taskIds != null ? new ArrayList<>(taskIds) : null;
+        save();
+    }
+
+    public synchronized String getCurrentGoalText() {
+        return state.currentGoalText;
+    }
+
+    public synchronized List<String> getCurrentPlanTaskIds() {
+        return state.currentPlanTaskIds != null
+                ? Collections.unmodifiableList(state.currentPlanTaskIds)
+                : null;
+    }
+
+    public synchronized void clearCurrentPlan() {
+        state.currentGoalText = null;
+        state.currentPlanTaskIds = null;
+        save();
+    }
+
+    // -------------------------------------------------------------------------
     // Persistence
     // -------------------------------------------------------------------------
 
@@ -234,10 +282,48 @@ public class GoalStore {
     // Internal state shape (serialized to JSON)
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Gear goal queue (staged items — not yet planned)
+    // -------------------------------------------------------------------------
+
+    public synchronized Set<String> getGearGoals() {
+        return Collections.unmodifiableSet(state.gearGoalIds);
+    }
+
+    public synchronized boolean isGearGoal(String id) {
+        return id != null && state.gearGoalIds.contains(id);
+    }
+
+    public synchronized void addGearGoal(String id) {
+        if (id == null || id.isEmpty()) return;
+        state.gearGoalIds.add(id);
+        save();
+    }
+
+    public synchronized void removeGearGoal(String id) {
+        if (state.gearGoalIds.remove(id)) save();
+    }
+
+    public synchronized void clearAllGoals() {
+        state.relicGoals.clear();
+        state.areaGoals.clear();
+        state.pactGoals.clear();
+        state.gearGoalIds.clear();
+        state.currentGoalText = null;
+        state.currentPlanTaskIds = null;
+        save();
+    }
+
+    public synchronized int getTotalGoalCount() {
+        return state.relicGoals.size() + state.areaGoals.size()
+                + state.pactGoals.size() + state.gearGoalIds.size();
+    }
+
     private static class State {
         Set<String> relicGoals = new LinkedHashSet<>();
         Set<String> areaGoals = new LinkedHashSet<>();
         Set<String> pactGoals = new LinkedHashSet<>();
+        Set<String> gearGoalIds = new LinkedHashSet<>();
         Set<String> unlocked = new LinkedHashSet<>();
 
         // Phase 2 additions. Old goals.json files written before these fields
@@ -246,13 +332,19 @@ public class GoalStore {
         Set<String> selectedPactIds = new LinkedHashSet<>();
         int respecsUsed = 0;
 
+        // Session persistence: last active plan. Null when no plan is saved.
+        String currentGoalText;
+        List<String> currentPlanTaskIds;
+
         State ensureInitialized() {
             if (relicGoals == null) relicGoals = new LinkedHashSet<>();
             if (areaGoals == null) areaGoals = new LinkedHashSet<>();
             if (pactGoals == null) pactGoals = new LinkedHashSet<>();
+            if (gearGoalIds == null) gearGoalIds = new LinkedHashSet<>();
             if (unlocked == null) unlocked = new LinkedHashSet<>();
             if (selectedPactIds == null) selectedPactIds = new LinkedHashSet<>();
-            // respecsUsed is a primitive int — Gson defaults it to 0 for missing fields.
+            // respecsUsed, currentGoalText, currentPlanTaskIds: primitives/nullable —
+            // Gson defaults them to 0/null for old files, which is correct.
             return this;
         }
     }

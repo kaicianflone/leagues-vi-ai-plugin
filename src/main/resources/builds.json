@@ -1,0 +1,151 @@
+{
+  "builds": [
+    {
+      "id": "melee_bosser_v1",
+      "name": "Melee Bosser",
+      "description": "Full Bandos/Torva, Piety + Rigour relics, Kandarin + Wilderness areas. Chains GWD + Corp tasks. Best single-target DPS via Inquisitor's mace or Scythe.",
+      "author": "seed",
+      "version": 1,
+      "gear": {
+        "HEAD": null,
+        "CAPE": "infernal_cape",
+        "AMULET": "amulet_of_torture",
+        "WEAPON": "abyssal_whip",
+        "SHIELD": "avernic_defender",
+        "BODY": "bandos_chestplate",
+        "LEGS": "bandos_tassets",
+        "HANDS": "barrows_gloves",
+        "FEET": "primordial_boots",
+        "RING": "berserker_ring_i",
+        "AMMO": null
+      },
+      "relicIds": [],
+      "areaIds": [],
+      "pactIds": [],
+      "targetSkills": {"attack": 90, "strength": 90, "defence": 70, "prayer": 70},
+      "notes": [
+        "Start with Fire Cape before Infernal — it's the prerequisite",
+        "Barrows Gloves requires Recipe for Disaster completion",
+        "Kandarin unlocks Piety prayer and many boss tasks"
+      ]
+    },
+    {
+      "id": "ranged_pvm_dps_v1",
+      "name": "Ranged PvM DPS",
+      "description": "Armadyl + Twisted Bow endgame ranged setup. Excels at Chambers of Xeric and high-magic-level bosses where the bow's passive effect is strongest.",
+      "author": "seed",
+      "version": 1,
+      "gear": {
+        "HEAD": null,
+        "CAPE": "fire_cape",
+        "AMULET": "anguish",
+        "WEAPON": "twisted_bow",
+        "SHIELD": null,
+        "BODY": "armadyl_chestplate",
+        "LEGS": "armadyl_chainskirt",
+        "HANDS": "barrows_gloves",
+        "FEET": "pegasian_boots",
+        "RING": "archer_ring_i",
+        "AMMO": null
+      },
+      "relicIds": [],
+      "areaIds": [],
+      "pactIds": [],
+      "targetSkills": {"ranged": 90, "defence": 70},
+      "notes": [
+        "Twisted Bow scales with enemy magic level — best against high-magic bosses",
+        "Armadyl set requires Armadyl GWD access",
+        "Swap twisted bow for blowpipe on low-magic targets"
+      ]
+    },
+    {
+      "id": "skiller_point_farmer_v1",
+      "name": "Skiller / Point Farmer",
+      "description": "Skilling-focused build prioritising task completion for League points. Prospector + Lumberjack bonuses stack for mining and woodcutting task chains.",
+      "author": "seed",
+      "version": 1,
+      "gear": {
+        "HEAD": "prospector_helmet",
+        "CAPE": "graceful_cape",
+        "AMULET": "amulet_of_glory",
+        "WEAPON": null,
+        "SHIELD": null,
+        "BODY": "lumberjack_top",
+        "LEGS": "rune_platelegs",
+        "HANDS": null,
+        "FEET": "dragon_boots",
+        "RING": null,
+        "AMMO": null
+      },
+      "relicIds": [],
+      "areaIds": [],
+      "pactIds": [],
+      "targetSkills": {"woodcutting": 90, "mining": 85, "farming": 70},
+      "notes": [
+        "Focus on skilling tasks first for early point lead",
+        "Graceful reduces run drain — complete rooftop courses early",
+        "Prospector helmet gives +0.4% mining XP bonus — wear for all mining tasks"
+      ]
+    },
+    {
+      "id": "ironmeme_pure_v1",
+      "name": "Ironmeme Pure",
+      "description": "Low-defence magic pure. Ancestral + occult for maximum magic damage output. Targets magic tasks and slayer with ice barrage.",
+      "author": "seed",
+      "version": 1,
+      "gear": {
+        "HEAD": null,
+        "CAPE": "god_cape_zamorak",
+        "AMULET": "occult_necklace",
+        "WEAPON": null,
+        "SHIELD": null,
+        "BODY": "ancestral_robe_top",
+        "LEGS": "ancestral_robe_bottom",
+        "HANDS": "barrows_gloves",
+        "FEET": "eternal_boots",
+        "RING": "seers_ring_i",
+        "AMMO": null
+      },
+      "relicIds": [],
+      "areaIds": [],
+      "pactIds": [],
+      "targetSkills": {"magic": 90, "defence": 45},
+      "notes": [
+        "Low defence pure build",
+        "Magic splash tasks doable at low combat",
+        "God cape obtained from Mage Arena — requires 60 Magic",
+        "Ancestral requires Chambers of Xeric completion"
+      ]
+    },
+    {
+      "id": "all_rounder_starter_v1",
+      "name": "All-Rounder Starter",
+      "description": "Safe, accessible starter build using easily obtained gear. Balanced stats let you tackle most early tasks without specialising.",
+      "author": "seed",
+      "version": 1,
+      "gear": {
+        "HEAD": null,
+        "CAPE": "fire_cape",
+        "AMULET": "amulet_of_glory",
+        "WEAPON": "abyssal_whip",
+        "SHIELD": null,
+        "BODY": "rune_platebody",
+        "LEGS": "rune_platelegs",
+        "HANDS": null,
+        "FEET": "dragon_boots",
+        "RING": "berserker_ring_i",
+        "AMMO": null
+      },
+      "relicIds": [],
+      "areaIds": [],
+      "pactIds": [],
+      "targetSkills": {"attack": 70, "strength": 70, "defence": 60},
+      "notes": [
+        "Safe starting build for new players",
+        "Upgrade to Bandos when you can",
+        "Train off combat tasks early",
+        "Rune armour available early — no rare drops needed"
+      ]
+    }
+  ]
+}

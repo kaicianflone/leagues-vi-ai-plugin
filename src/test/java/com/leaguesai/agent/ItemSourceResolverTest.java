@@ -13,6 +13,7 @@ import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -138,5 +139,119 @@ public class ItemSourceResolverTest {
         List<PlannedStep> out = resolver.resolveBatch(java.util.Collections.emptyList());
         assertNotNull(out);
         assertEquals(0, out.size());
+    }
+
+    // -------------------------------------------------------------------------
+    // Two-phase DB-first path (ItemDependencyGraph present)
+    // -------------------------------------------------------------------------
+
+    @Test
+    public void resolveBatch_dbItemSkipsLlmCall() throws Exception {
+        // When ItemDependencyGraph covers all items, the LLM is never called.
+        LlmClient mockClient = mock(LlmClient.class);
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+
+        com.leaguesai.data.model.ItemDependency dep =
+                com.leaguesai.data.model.ItemDependency.builder()
+                        .itemId("coal")
+                        .itemName("Coal")
+                        .obtainMethod(ObtainMethod.DROPPED)
+                        .sourceName("Scorpion")
+                        .build();
+        when(graph.findItemByName("Coal")).thenReturn(dep);
+
+        Map<String, Integer> items = new java.util.LinkedHashMap<>();
+        items.put("Coal", 1);
+        Task t = Task.builder().id("a").name("A").itemsRequired(items).build();
+
+        ItemSourceResolver resolver = new ItemSourceResolver(mockClient, graph);
+        List<PlannedStep> result = resolver.resolveBatch(
+                java.util.Collections.singletonList(PlannedStep.builder().task(t).build()));
+
+        // LLM must not have been called because the DB covered every item.
+        verify(mockClient, org.mockito.Mockito.never()).chatCompletion(anyString(), any());
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertTrue("DB source should be attached",
+                result.get(0).getItemSourceNotes().containsKey("Coal"));
+    }
+
+    @Test
+    public void resolveBatch_partialDbCoverage_onlyUnknownItemsSentToLlm() throws Exception {
+        // Items covered by DB stay local; only the remainder goes to the LLM.
+        LlmClient mockClient = mock(LlmClient.class);
+        when(mockClient.chatCompletion(anyString(), any())).thenReturn("Iron ore :: Mine it");
+
+        ItemDependencyGraph graph = mock(ItemDependencyGraph.class);
+        when(graph.isEmpty()).thenReturn(false);
+
+        com.leaguesai.data.model.ItemDependency coalDep =
+                com.leaguesai.data.model.ItemDependency.builder()
+                        .itemId("coal")
+                        .itemName("Coal")
+                        .obtainMethod(ObtainMethod.DROPPED)
+                        .sourceName("Scorpion")
+                        .build();
+        when(graph.findItemByName("Coal")).thenReturn(coalDep);
+        when(graph.findItemByName("Iron ore")).thenReturn(null);  // not in DB
+
+        Map<String, Integer> items = new java.util.LinkedHashMap<>();
+        items.put("Coal", 1);
+        items.put("Iron ore", 1);
+        Task t = Task.builder().id("a").name("A").itemsRequired(items).build();
+
+        ItemSourceResolver resolver = new ItemSourceResolver(mockClient, graph);
+        List<PlannedStep> result = resolver.resolveBatch(
+                java.util.Collections.singletonList(PlannedStep.builder().task(t).build()));
+
+        // LLM called exactly once for the un-covered item.
+        verify(mockClient, times(1)).chatCompletion(anyString(), any());
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        Map<String, String> notes = result.get(0).getItemSourceNotes();
+        assertTrue("DB-covered item should be in notes", notes.containsKey("Coal"));
+        assertTrue("LLM-covered item should be in notes", notes.containsKey("Iron ore"));
+    }
+
+    @Test
+    public void buildSourceLine_droppedItem() {
+        com.leaguesai.data.model.ItemDependency dep =
+                com.leaguesai.data.model.ItemDependency.builder()
+                        .itemId("coal")
+                        .itemName("Coal")
+                        .obtainMethod(ObtainMethod.DROPPED)
+                        .sourceName("Giant bat")
+                        .build();
+        String line = ItemSourceResolver.buildSourceLine(dep);
+        assertNotNull(line);
+        assertTrue("Should mention obtain method", line.contains("Dropped"));
+        assertTrue("Should mention source name", line.contains("Giant bat"));
+    }
+
+    @Test
+    public void buildSourceLine_craftedItemWithSkill() {
+        com.leaguesai.data.model.ItemDependency dep =
+                com.leaguesai.data.model.ItemDependency.builder()
+                        .itemId("steel_bar")
+                        .itemName("Steel bar")
+                        .obtainMethod(ObtainMethod.SMITHED)
+                        .skillRequired("smithing")
+                        .skillLevel(30)
+                        .sourceName("anvil")
+                        .build();
+        String line = ItemSourceResolver.buildSourceLine(dep);
+        assertNotNull(line);
+        assertTrue(line.contains("Smithed"));
+        assertTrue(line.contains("smithing"));
+        assertTrue(line.contains("30"));
+        assertTrue(line.contains("anvil"));
+    }
+
+    @Test
+    public void buildSourceLine_nullReturnsNull() {
+        assertNull(ItemSourceResolver.buildSourceLine(null));
     }
 }

@@ -41,6 +41,10 @@ public class GoalsPanel extends JPanel {
     private static final Color LINK_FG = new Color(120, 170, 240);
     private static final Color BORDER_COLOR = new Color(60, 60, 60);
 
+    private static final Color GOAL_QUEUE_BG  = new Color(35, 45, 35);
+    private static final Color GOAL_QUEUE_FG  = new Color(130, 210, 130);
+    private static final Color GOAL_QUEUE_BTN = new Color(50, 90, 50);
+
     private final JLabel goalLabel;
     private final JLabel progressLabel;
     private final JLabel reviewBanner;
@@ -53,7 +57,16 @@ public class GoalsPanel extends JPanel {
     private JPanel centerColumn;
     private java.awt.Component unlockablesSlot;
 
+    // Pending goals queue bar
+    private final JPanel goalQueuePanel;
+    private final JLabel goalQueueLabel;
+    private final JButton planGoalsButton;
+    private final JButton saveGoalsButton;
+
     private Runnable onOpenChat;
+    private Runnable onBrowseBuilds;
+    private Runnable onPlanGoals;
+    private Runnable onSaveGoalsAsBuild;
 
     public GoalsPanel() {
         setLayout(new BorderLayout(0, 6));
@@ -123,6 +136,51 @@ public class GoalsPanel extends JPanel {
         top.add(javax.swing.Box.createVerticalStrut(6));
         top.add(reviewWrapper);
 
+        // ---- Pending goals queue bar (shown between top and scroll when goals are staged) ----
+        goalQueueLabel = new JLabel("0 goals staged");
+        goalQueueLabel.setForeground(GOAL_QUEUE_FG);
+        goalQueueLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 10));
+
+        planGoalsButton = new JButton("Plan goals");
+        planGoalsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        planGoalsButton.setBackground(GOAL_QUEUE_BTN);
+        planGoalsButton.setForeground(Color.WHITE);
+        planGoalsButton.setFocusPainted(false);
+        planGoalsButton.setBorderPainted(false);
+        planGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        planGoalsButton.addActionListener(e -> { if (onPlanGoals != null) onPlanGoals.run(); });
+
+        saveGoalsButton = new JButton("Save as build");
+        saveGoalsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        saveGoalsButton.setBackground(new Color(40, 55, 75));
+        saveGoalsButton.setForeground(new Color(160, 190, 230));
+        saveGoalsButton.setFocusPainted(false);
+        saveGoalsButton.setBorderPainted(false);
+        saveGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        saveGoalsButton.addActionListener(e -> { if (onSaveGoalsAsBuild != null) onSaveGoalsAsBuild.run(); });
+
+        // Label row
+        JPanel goalQueueLabelRow = new JPanel(new BorderLayout());
+        goalQueueLabelRow.setOpaque(false);
+        goalQueueLabelRow.add(goalQueueLabel, BorderLayout.WEST);
+
+        // Buttons row — equal-width side-by-side
+        JPanel goalQueueButtons = new JPanel(new java.awt.GridLayout(1, 2, 4, 0));
+        goalQueueButtons.setOpaque(false);
+        goalQueueButtons.add(saveGoalsButton);
+        goalQueueButtons.add(planGoalsButton);
+
+        goalQueuePanel = new JPanel();
+        goalQueuePanel.setLayout(new BoxLayout(goalQueuePanel, BoxLayout.Y_AXIS));
+        goalQueuePanel.setBackground(GOAL_QUEUE_BG);
+        goalQueuePanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(60, 90, 60)),
+                BorderFactory.createEmptyBorder(4, 8, 4, 8)));
+        goalQueuePanel.add(goalQueueLabelRow);
+        goalQueuePanel.add(javax.swing.Box.createVerticalStrut(4));
+        goalQueuePanel.add(goalQueueButtons);
+        goalQueuePanel.setVisible(false);
+
         // ---- Center: single scroll column holding [top block, unlockables
         //      placeholder, empty state, accordion] so all three sections
         //      scroll together. Heartbeat stays pinned at SOUTH. ----
@@ -159,16 +217,40 @@ public class GoalsPanel extends JPanel {
         // horizontal scrollbar instead of silently clipping.
         scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
-        add(scroll, BorderLayout.CENTER);
+
+        // Goal queue bar sits above the scroll pane, pinned at NORTH.
+        JPanel centerWrapper = new JPanel(new BorderLayout(0, 0));
+        centerWrapper.setBackground(BACKGROUND_COLOR);
+        centerWrapper.add(goalQueuePanel, BorderLayout.NORTH);
+        centerWrapper.add(scroll, BorderLayout.CENTER);
+        add(centerWrapper, BorderLayout.CENTER);
         emptyStateLabel.setVisible(true);
 
-        // ---- Bottom: heartbeat ----
+        // ---- Bottom: heartbeat + Browse Builds button ----
         heartbeatLabel = new JLabel(" ");
         heartbeatLabel.setForeground(HEARTBEAT_FG);
         heartbeatLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
         heartbeatLabel.setBorder(BorderFactory.createEmptyBorder(6, 4, 2, 4));
 
-        add(heartbeatLabel, BorderLayout.SOUTH);
+        JButton browseBuildsButton = new JButton("Browse Builds \u2197");
+        browseBuildsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        browseBuildsButton.setBackground(new Color(45, 50, 60));
+        browseBuildsButton.setForeground(new Color(160, 190, 230));
+        browseBuildsButton.setFocusPainted(false);
+        browseBuildsButton.setBorderPainted(false);
+        browseBuildsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        browseBuildsButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+        browseBuildsButton.addActionListener(e -> {
+            if (onBrowseBuilds != null) onBrowseBuilds.run();
+        });
+
+        JPanel bottomPanel = new JPanel();
+        bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
+        bottomPanel.setBackground(BACKGROUND_COLOR);
+        bottomPanel.add(heartbeatLabel);
+        bottomPanel.add(browseBuildsButton);
+
+        add(bottomPanel, BorderLayout.SOUTH);
     }
 
     public void setGoal(String goal) {
@@ -233,6 +315,10 @@ public class GoalsPanel extends JPanel {
         this.onOpenChat = callback;
     }
 
+    public void setOnBrowseBuilds(Runnable callback) {
+        this.onBrowseBuilds = callback;
+    }
+
     /**
      * Mount the unlockables goal picker (relics + areas + pacts) into the
      * center scroll column. Swaps out the initial empty strut so the layout
@@ -269,5 +355,55 @@ public class GoalsPanel extends JPanel {
 
     public UnlockablesPanel getUnlockablesPanel() {
         return unlockables;
+    }
+
+    public void setOnPlanGoals(Runnable callback) {
+        this.onPlanGoals = callback;
+    }
+
+    public void setOnSaveGoalsAsBuild(Runnable callback) {
+        this.onSaveGoalsAsBuild = callback;
+    }
+
+    /**
+     * Update the pending-goals queue bar. {@code count == 0} hides the bar.
+     * The label lists up to 4 names and abbreviates the rest to keep it compact.
+     */
+    public void updateGoalQueue(int count, java.util.List<String> names) {
+        SwingUtilities.invokeLater(() -> {
+            if (count <= 0) {
+                goalQueuePanel.setVisible(false);
+                return;
+            }
+            String label;
+            if (names == null || names.isEmpty()) {
+                label = count + " goal" + (count == 1 ? "" : "s") + " staged";
+            } else {
+                int show = Math.min(names.size(), 3);
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < show; i++) {
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(names.get(i));
+                }
+                if (names.size() > show) sb.append(" +").append(names.size() - show).append(" more");
+                label = sb.toString();
+            }
+            goalQueueLabel.setText(label);
+            planGoalsButton.setText("Plan " + count + " goal" + (count == 1 ? "" : "s"));
+            goalQueuePanel.setVisible(true);
+            goalQueuePanel.revalidate();
+            goalQueuePanel.repaint();
+        });
+    }
+
+    /** Show a banner below the goal queue (used for goals-only activation confirmation). */
+    public void showBuildGoalsOnly(String buildName) {
+        SwingUtilities.invokeLater(() -> {
+            goalLabel.setText("Goals set: " + buildName);
+            progressLabel.setText("Plan pending — ask chat or press Plan goals");
+            emptyStateLabel.setVisible(false);
+            revalidate();
+            repaint();
+        });
     }
 }

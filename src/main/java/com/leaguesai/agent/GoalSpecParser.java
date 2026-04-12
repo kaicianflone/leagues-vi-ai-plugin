@@ -5,6 +5,7 @@ import com.leaguesai.data.model.Area;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -16,9 +17,12 @@ import java.util.regex.Pattern;
  *
  * <p>Recognised phrase shapes (case-insensitive):
  * <ul>
- *   <li>{@code "plan unlock the <Name> relic"} → RELIC</li>
- *   <li>{@code "plan unlock pact <Name>"} → PACT</li>
- *   <li>{@code "plan unlock <Name>"} → AREA (fall-through after relic/pact)</li>
+ *   <li>{@code "plan unlock the <Name> relic"} → RELIC (strict regex)</li>
+ *   <li>{@code "plan unlock pact <Name>"} → PACT (strict regex)</li>
+ *   <li>{@code "plan unlock <Name>"} → AREA (strict regex, after relic/pact)</li>
+ *   <li>Any phrase containing "relic" + a known relic name → RELIC (fuzzy)</li>
+ *   <li>Any phrase containing "pact" + a known pact name → PACT (fuzzy)</li>
+ *   <li>Any phrase containing "unlock"/"area" + a known area name → AREA (fuzzy)</li>
  *   <li>Anything else that {@code ChatService} already recognised as a plan
  *       trigger → TASK_BATCH (preserves the existing flat-resolver path)</li>
  *   <li>No trigger detected → FREEFORM</li>
@@ -50,14 +54,18 @@ public final class GoalSpecParser {
     private GoalSpecParser() {}
 
     /**
-     * Turn a phrase into a {@link GoalSpec}. Returns {@code FREEFORM} when no
-     * shape matches; the caller's existing planner logic handles that case.
-     *
-     * <p>{@code repo} may be {@code null} (the plugin boots before the repo is
-     * loaded) — in that case every lookup returns empty and the parser falls
-     * through to {@link GoalType#FREEFORM}.
+     * Turn a phrase into a {@link GoalSpec}. Backward-compat overload that
+     * passes {@code null} for the item dependency graph (item detection disabled).
      */
     public static GoalSpec parse(String phrase, TaskRepository repo) {
+        return parse(phrase, repo, null);
+    }
+
+    /**
+     * Turn a phrase into a {@link GoalSpec}, with optional item detection.
+     * Returns {@code FREEFORM} when no shape matches.
+     */
+    public static GoalSpec parse(String phrase, TaskRepository repo, ItemDependencyGraph itemGraph) {
         if (phrase == null || phrase.trim().isEmpty()) {
             return freeform(phrase);
         }
@@ -120,8 +128,125 @@ public final class GoalSpecParser {
             return taskBatch(phrase);
         }
 
-        // No "plan unlock ..." shape at all. Fall through to task batch; the
-        // caller (ChatService.maybeTriggerPlanner) will decide whether any of
+        // No "plan unlock ..." shape matched. Try a fuzzy name scan so that
+        // natural-language phrases like "I want to unlock the Grimoire relic" or
+        // "set goal Karamja" still resolve to the right GoalType.
+        //
+        // Guards: require a domain keyword ("relic", "pact", "unlock", "area")
+        // before scanning to avoid false-positive matches on ordinary chat.
+        if (repo != null) {
+            String lower = trimmed.toLowerCase();
+
+            // Relic: "... grimoire relic ..." / "unlock the grimoire"
+            // Longest-match: pick the relic whose name is longest and contained in the phrase,
+            // so "Greater Grimoire" beats "Grimoire" when both names appear in the list.
+            if (lower.contains("relic")) {
+                List<Relic> relics = repo.getAllRelics();
+                if (relics != null) {
+                    Relic best = null;
+                    for (Relic r : relics) {
+                        if (r != null && r.getName() != null
+                                && lower.contains(r.getName().toLowerCase())) {
+                            if (best == null || r.getName().length() > best.getName().length()) {
+                                best = r;
+                            }
+                        }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.RELIC)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(best.getUnlockCost())
+                                .build();
+                    }
+                }
+            }
+
+            // Pact: "... nature's call pact ..." / "select pact X"
+            if (lower.contains("pact")) {
+                List<Pact> pacts = repo.getAllPacts();
+                if (pacts != null) {
+                    Pact best = null;
+                    for (Pact p : pacts) {
+                        if (p != null && p.getName() != null
+                                && lower.contains(p.getName().toLowerCase())) {
+                            if (best == null || p.getName().length() > best.getName().length()) {
+                                best = p;
+                            }
+                        }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.PACT)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(0)
+                                .build();
+                    }
+                }
+            }
+
+            // Area: "unlock karamja" / "set goal for kourend area"
+            if (lower.contains("unlock") || lower.contains("area")) {
+                List<Area> areas = repo.getAllAreas();
+                if (areas != null) {
+                    Area best = null;
+                    for (Area a : areas) {
+                        if (a != null && a.getName() != null
+                                && lower.contains(a.getName().toLowerCase())) {
+                            if (best == null || a.getName().length() > best.getName().length()) {
+                                best = a;
+                            }
+                        }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.AREA)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(best.getUnlockCost())
+                                .build();
+                    }
+                }
+            }
+        }
+
+        // Item: "I need barrows gloves" / "how do I get dragon scimitar" / "get rune platebody"
+        // Guard: require "get", "need", "make", "craft", "smith", "fletch", "brew", "cook"
+        // and the itemGraph must have data. Fuzzy name match against graph content.
+        if (itemGraph != null && !itemGraph.isEmpty()) {
+            String lowerPhrase = trimmed.toLowerCase();
+            boolean hasItemKeyword = lowerPhrase.contains("get ") || lowerPhrase.contains("need ")
+                    || lowerPhrase.contains("make ") || lowerPhrase.contains("craft ")
+                    || lowerPhrase.contains("smith ") || lowerPhrase.contains("fletch ")
+                    || lowerPhrase.contains("brew ") || lowerPhrase.contains("cook ")
+                    || lowerPhrase.contains("want ") || lowerPhrase.contains("farm ")
+                    || lowerPhrase.contains("obtain ") || lowerPhrase.contains("i need")
+                    || lowerPhrase.contains("i want") || lowerPhrase.startsWith("get ")
+                    || lowerPhrase.startsWith("need ");
+            if (hasItemKeyword) {
+                // findLongestMatchingItem uses a pre-sorted (longest-first) name list
+                // and returns on the first match — O(k) not O(n).
+                com.leaguesai.data.model.ItemDependency found =
+                        itemGraph.findLongestMatchingItem(lowerPhrase);
+                if (found != null) {
+                    return GoalSpec.builder()
+                            .type(GoalType.ITEM)
+                            .targetId(found.getItemId())
+                            .targetName(found.getItemName())
+                            .rawPhrase(phrase)
+                            .unlockCost(0)
+                            .build();
+                }
+            }
+        }
+
+        // No shape matched. Fall through to task batch; the caller
+        // (ChatService.maybeTriggerPlanner) will decide whether any of
         // its own trigger phrases fire.
         return taskBatch(phrase);
     }

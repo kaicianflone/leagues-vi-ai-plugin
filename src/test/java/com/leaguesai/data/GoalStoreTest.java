@@ -1,5 +1,6 @@
 package com.leaguesai.data;
 
+import com.leaguesai.data.model.Build;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -7,6 +8,8 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.HashSet;
 
 import static org.junit.Assert.*;
 
@@ -182,6 +185,196 @@ public class GoalStoreTest {
         assertFalse(store.selectPact(null));
         assertFalse(store.selectPact(""));
         assertEquals(0, store.getSelectedPactCount());
+    }
+
+    // ----- Phase 2 PR 4: unionBuildPicks ----------------------------------------
+
+    @Test
+    public void unionBuildPicks_merges_all_three_sets() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+
+        Build build = Build.builder()
+                .relicIds(new HashSet<>(Arrays.asList("r1", "r2")))
+                .areaIds(new HashSet<>(Arrays.asList("a1")))
+                .pactIds(new HashSet<>(Arrays.asList("p1")))
+                .build();
+
+        store.unionBuildPicks(build);
+
+        assertTrue(store.getRelicGoals().contains("r1"));
+        assertTrue(store.getRelicGoals().contains("r2"));
+        assertTrue(store.getAreaGoals().contains("a1"));
+        assertTrue(store.getPactGoals().contains("p1"));
+    }
+
+    @Test
+    public void unionBuildPicks_does_not_touch_selectedPactIds() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        store.selectPact("existing_pact");
+
+        Build build = Build.builder()
+                .pactIds(new HashSet<>(Arrays.asList("new_pact")))
+                .build();
+        store.unionBuildPicks(build);
+
+        // pactGoals should contain new_pact
+        assertTrue(store.getPactGoals().contains("new_pact"));
+        // selectedPactIds must NOT have new_pact added — union only touches goal sets
+        assertFalse("unionBuildPicks must not add to selectedPactIds",
+                store.isPactSelected("new_pact"));
+        // The existing selection is untouched
+        assertTrue("existing pact selection must survive unionBuildPicks",
+                store.isPactSelected("existing_pact"));
+        assertEquals("selectedPactIds size must remain 1", 1, store.getSelectedPactCount());
+    }
+
+    @Test
+    public void unionBuildPicks_single_save() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertFalse("file should not exist before first write", f.exists());
+
+        Build build = Build.builder()
+                .relicIds(new HashSet<>(Arrays.asList("r1")))
+                .areaIds(new HashSet<>(Arrays.asList("a1")))
+                .pactIds(new HashSet<>(Arrays.asList("p1")))
+                .build();
+
+        store.unionBuildPicks(build);
+
+        assertTrue("goals.json must exist after unionBuildPicks", f.exists());
+
+        // Reload and verify all three ids present — confirms a single complete write
+        GoalStore reloaded = new GoalStore(f);
+        assertTrue(reloaded.isRelicGoal("r1"));
+        assertTrue(reloaded.isAreaGoal("a1"));
+        assertTrue(reloaded.isPactGoal("p1"));
+    }
+
+    @Test
+    public void unionBuildPicks_null_build_is_noop() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        // Must not throw, must leave all sets empty
+        store.unionBuildPicks(null);
+        assertTrue(store.getRelicGoals().isEmpty());
+        assertTrue(store.getAreaGoals().isEmpty());
+        assertTrue(store.getPactGoals().isEmpty());
+    }
+
+    // ----- PR 3: gear goal queue -------------------------------------------
+
+    @Test
+    public void gearGoalRoundTrip() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertFalse(store.isGearGoal("infernal_cape"));
+        assertTrue(store.getGearGoals().isEmpty());
+
+        store.addGearGoal("infernal_cape");
+        assertTrue(store.isGearGoal("infernal_cape"));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertTrue("gear goal persists to disk", reloaded.isGearGoal("infernal_cape"));
+    }
+
+    @Test
+    public void gearGoalRemove() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+        store.addGearGoal("infernal_cape");
+        store.removeGearGoal("infernal_cape");
+        assertFalse(store.isGearGoal("infernal_cape"));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertFalse(reloaded.isGearGoal("infernal_cape"));
+    }
+
+    @Test
+    public void gearGoalNullAndEmptyIgnored() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        store.addGearGoal(null);
+        store.addGearGoal("");
+        assertTrue(store.getGearGoals().isEmpty());
+        assertFalse(store.isGearGoal(null));
+    }
+
+    @Test
+    public void getTotalGoalCount_countsAllFourSets() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        assertEquals(0, store.getTotalGoalCount());
+
+        store.addRelicGoal("r1");
+        store.addAreaGoal("a1");
+        store.addPactGoal("p1");
+        store.addGearGoal("g1");
+
+        assertEquals(4, store.getTotalGoalCount());
+        store.removeRelicGoal("r1");
+        assertEquals(3, store.getTotalGoalCount());
+    }
+
+    @Test
+    public void clearAllGoals_wipesEverythingAndNullsPlan() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        store.addRelicGoal("r1");
+        store.addAreaGoal("a1");
+        store.addPactGoal("p1");
+        store.addGearGoal("g1");
+        store.saveCurrentPlan("My Plan", Arrays.asList("task1", "task2"));
+
+        store.clearAllGoals();
+
+        assertTrue(store.getRelicGoals().isEmpty());
+        assertTrue(store.getAreaGoals().isEmpty());
+        assertTrue(store.getPactGoals().isEmpty());
+        assertTrue(store.getGearGoals().isEmpty());
+        assertNull("clearAllGoals must null currentGoalText", store.getCurrentGoalText());
+        assertNull("clearAllGoals must null currentPlanTaskIds", store.getCurrentPlanTaskIds());
+        assertEquals(0, store.getTotalGoalCount());
+
+        // Verify nulls survive restart — no ghost plan on next load.
+        GoalStore reloaded = new GoalStore(f);
+        assertNull(reloaded.getCurrentGoalText());
+        assertNull(reloaded.getCurrentPlanTaskIds());
+    }
+
+    // ----- Session plan persistence ----------------------------------------
+
+    @Test
+    public void saveCurrentPlan_roundTrip() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertNull(store.getCurrentGoalText());
+        assertNull(store.getCurrentPlanTaskIds());
+
+        store.saveCurrentPlan("Unlock Grimoire", Arrays.asList("t1", "t2", "t3"));
+        assertEquals("Unlock Grimoire", store.getCurrentGoalText());
+        assertEquals(3, store.getCurrentPlanTaskIds().size());
+        assertEquals("t1", store.getCurrentPlanTaskIds().get(0));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertEquals("Unlock Grimoire", reloaded.getCurrentGoalText());
+        assertEquals(Arrays.asList("t1", "t2", "t3"), reloaded.getCurrentPlanTaskIds());
+    }
+
+    @Test
+    public void clearCurrentPlan_nullsFieldsAndPersists() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+        store.saveCurrentPlan("Goal", Arrays.asList("t1"));
+        store.clearCurrentPlan();
+
+        assertNull(store.getCurrentGoalText());
+        assertNull(store.getCurrentPlanTaskIds());
+
+        GoalStore reloaded = new GoalStore(f);
+        assertNull(reloaded.getCurrentGoalText());
+        assertNull(reloaded.getCurrentPlanTaskIds());
     }
 
     @Test

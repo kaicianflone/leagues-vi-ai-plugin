@@ -2,7 +2,7 @@
 
 ## What this project is
 
-A RuneLite plugin that acts as an AI-powered Leagues VI coach. Friends-only distribution. Six modules: `core` (event bus + monitors), `data` (SQLite task repository + vector index), `agent` (OpenAI / ChatGPT OAuth client + goal planner), `overlay` (in-game rendering), `ui` (side panel with chat, advice, settings tabs), and a standalone `scraper` subproject that populates the task database from the OSRS Wiki.
+A RuneLite plugin that acts as an AI-powered Leagues VI coach. Friends-only distribution. Six modules: `core` (event bus + monitors), `data` (SQLite task repository + vector index + BuildStore + GearRepository), `agent` (OpenAI / ChatGPT OAuth client + goal planner + BuildExpander + ProximityOptimizer), `overlay` (in-game rendering), `ui` (side panel with chat, goals, builds, unlockables, settings), and a standalone `scraper` subproject that populates the task database from the OSRS Wiki.
 
 ## Non-negotiable rules for overlays
 
@@ -81,15 +81,13 @@ When the overlay chain doesn't fire, check:
 
 ## Phase 2 TODO — Leagues VI launch day (2026-04-15)
 
-The Demonic Pacts League wiki was incomplete when the Phase 1 goal picker
-(`UnlockablesPanel` + `DemonicPactsScraper`) shipped. On launch day the
-following items need to be scraped / wired in. **Do NOT hallucinate filter
-names or taxonomy — always read the live wiki first.**
+The Demonic Pacts League wiki was incomplete when Phase 1 and the PR 3 Builds
+system shipped. On launch day the following items need to be scraped / wired in.
+**Do NOT hallucinate filter names or taxonomy — always read the live wiki first.**
 
-- **Tasks scraping:** swap `WikiScraper.TASK_PAGES` from
-  `Trailblazer_Reloaded_League/Tasks` to
-  `Demonic_Pacts_League/Tasks`. Re-run `./scraper/scrape.sh`. Verify row
-  count > 0.
+- **Tasks scraping:** `WikiScraper.TASK_PAGES` already targets
+  `Demonic_Pacts_League/Tasks`. Re-run `./scraper/scrape.sh` on launch day.
+  Verify row count > 0.
 - **Task filter taxonomy:** the live Tasks page will expose filter UI with
   data attributes (likely `data-area-for-filtering`, `data-difficulty`,
   `data-category`, etc.). Read the page source, capture the exact attribute
@@ -121,11 +119,13 @@ names or taxonomy — always read the live wiki first.**
   `contextAssembler` may want to know which quest prereqs are satisfied by
   default so the planner doesn't route the player through them.
 
-Phase 1 files that Phase 2 will most likely touch:
+Phase 1–3 files that Phase 2 will most likely touch:
 `scraper/src/main/java/com/leaguesai/scraper/HtmlParser.java`,
 `scraper/src/main/java/com/leaguesai/scraper/WikiScraper.java`,
 `src/main/java/com/leaguesai/ui/UnlockablesPanel.java`,
-`src/main/java/com/leaguesai/ui/GoalsPanel.java`.
+`src/main/java/com/leaguesai/ui/GoalsPanel.java`,
+`src/main/java/com/leaguesai/data/GearRepository.java` (add real item IDs post-scrape),
+`src/main/resources/gear.json` (update `taskOverrides` once real task IDs are known).
 
 ## Where to look when something breaks
 
@@ -133,3 +133,6 @@ Phase 1 files that Phase 2 will most likely touch:
 - **Plan doesn't load:** check `ChatService.maybeTriggerPlanner` — it requires `taskRepo` + `goalPlanner` to be non-null.
 - **Overlay doesn't render:** check the singleton rule above. Check the debug log branch.
 - **Chat returns 400 "Unsupported content type":** the Codex backend is strict about `Content-Type` header. Must be exactly `application/json` (no charset parameter). See `CodexOauthClient.JSON` constant.
+- **Build activation does nothing:** check that `buildExpander != null` (DB may still be loading). Check `activateBuild` returns `true` — if `false`, look for the exception log. If goals-only mode triggers (0 gear tasks), look for the banner in GoalsPanel.
+- **Build gear tasks don't chain:** `tasks.target_items` may be empty. Re-run `./scraper/scrape.sh` to repopulate. Check with `sqlite3 ~/.runelite/leagues-ai/data/leagues-vi-tasks.db "SELECT COUNT(*) FROM tasks WHERE target_items IS NOT NULL AND target_items != '[]';"`.
+- **Build import fails silently:** `BuildStore.importFromFile` validates id format (`[a-z0-9_\\-]{1,64}`), max 5 builds per file, and string field lengths. Check the error toast or log for the specific rejection reason.

@@ -15,6 +15,10 @@ package com.leaguesai.agent;
  *       compatibility.</li>
  *   <li>{@link #FREEFORM} — no goal-shape detected; caller should not trigger
  *       the planner at all.</li>
+ *   <li>{@link #BUILD} — a gear build goal. Contains a set of terminal task IDs
+ *       (the tasks that reward each gear slot's item). The planner builds the
+ *       prereq DAG backward from those terminals and returns them topo-sorted.
+ *       No gap-closing loop.</li>
  * </ul>
  */
 public enum GoalType {
@@ -22,5 +26,13 @@ public enum GoalType {
     AREA,
     PACT,
     TASK_BATCH,
-    FREEFORM
+    FREEFORM,
+    BUILD,  // New: gear build activation — multi-terminal DAG, no gap-closing
+
+    /**
+     * An item goal — get a specific item. Resolves via {@link ItemDependencyGraph}
+     * to a prerequisite chain of crafting steps and Leagues tasks. Falls back to
+     * LLM source lookup for items not in the dependency graph.
+     */
+    ITEM
 }

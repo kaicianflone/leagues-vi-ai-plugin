@@ -84,6 +84,34 @@ public class SqliteWriter {
             );
 
             stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS items (" +
+                "  id               TEXT PRIMARY KEY," +
+                "  wiki_item_id     INTEGER NOT NULL DEFAULT 0," +
+                "  name             TEXT NOT NULL," +
+                "  slot             TEXT NOT NULL," +
+                "  region           TEXT," +
+                "  attack_stab      INTEGER NOT NULL DEFAULT 0," +
+                "  attack_slash     INTEGER NOT NULL DEFAULT 0," +
+                "  attack_crush     INTEGER NOT NULL DEFAULT 0," +
+                "  attack_magic     INTEGER NOT NULL DEFAULT 0," +
+                "  attack_ranged    INTEGER NOT NULL DEFAULT 0," +
+                "  defence_stab     INTEGER NOT NULL DEFAULT 0," +
+                "  defence_slash    INTEGER NOT NULL DEFAULT 0," +
+                "  defence_crush    INTEGER NOT NULL DEFAULT 0," +
+                "  defence_magic    INTEGER NOT NULL DEFAULT 0," +
+                "  defence_ranged   INTEGER NOT NULL DEFAULT 0," +
+                "  melee_strength   INTEGER NOT NULL DEFAULT 0," +
+                "  magic_damage     INTEGER NOT NULL DEFAULT 0," +
+                "  ranged_strength  INTEGER NOT NULL DEFAULT 0," +
+                "  prayer_bonus     INTEGER NOT NULL DEFAULT 0," +
+                "  weight           REAL NOT NULL DEFAULT 0.0," +
+                "  skill_requirements TEXT," +
+                "  wiki_url         TEXT," +
+                "  embedding        BLOB" +
+                ")"
+            );
+
+            stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS tasks (" +
                 "  id              TEXT PRIMARY KEY," +
                 "  name            TEXT NOT NULL," +
@@ -205,6 +233,101 @@ public class SqliteWriter {
                 ps.setBytes(17, embedding);
             } else {
                 ps.setNull(17, java.sql.Types.BLOB);
+            }
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Upserts an item row. {@code id} should be a stable slug (e.g.
+     * {@code "bandos_chestplate"}). Stats default to 0 when not available.
+     *
+     * @param id                 stable slug primary key
+     * @param wikiItemId         OSRS Wiki numeric item ID (0 if unknown)
+     * @param name               display name
+     * @param slot               equipment slot (HEAD/CAPE/etc.)
+     * @param region             area restriction, or null for global items
+     * @param attackStab         attack stab bonus
+     * @param attackSlash        attack slash bonus
+     * @param attackCrush        attack crush bonus
+     * @param attackMagic        attack magic bonus
+     * @param attackRanged       attack ranged bonus
+     * @param defenceStab        defence stab bonus
+     * @param defenceSlash       defence slash bonus
+     * @param defenceCrush       defence crush bonus
+     * @param defenceMagic       defence magic bonus
+     * @param defenceRanged      defence ranged bonus
+     * @param meleeStrength      melee strength bonus
+     * @param magicDamage        magic damage bonus
+     * @param rangedStrength     ranged strength bonus
+     * @param prayerBonus        prayer bonus
+     * @param weight             item weight in kg
+     * @param skillRequirementsJson JSON string e.g. {@code {"defence":65}} or null
+     * @param wikiUrl            canonical wiki URL or null
+     * @param embedding          float vector bytes (little-endian) or null
+     * @throws SQLException on any database error
+     */
+    public void upsertItem(
+            String id,
+            int wikiItemId,
+            String name,
+            String slot,
+            String region,
+            int attackStab,
+            int attackSlash,
+            int attackCrush,
+            int attackMagic,
+            int attackRanged,
+            int defenceStab,
+            int defenceSlash,
+            int defenceCrush,
+            int defenceMagic,
+            int defenceRanged,
+            int meleeStrength,
+            int magicDamage,
+            int rangedStrength,
+            int prayerBonus,
+            double weight,
+            String skillRequirementsJson,
+            String wikiUrl,
+            byte[] embedding
+    ) throws SQLException {
+        String sql =
+            "INSERT OR REPLACE INTO items " +
+            "(id, wiki_item_id, name, slot, region, " +
+            " attack_stab, attack_slash, attack_crush, attack_magic, attack_ranged, " +
+            " defence_stab, defence_slash, defence_crush, defence_magic, defence_ranged, " +
+            " melee_strength, magic_damage, ranged_strength, prayer_bonus, weight, " +
+            " skill_requirements, wiki_url, embedding) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, id);
+            ps.setInt(2, wikiItemId);
+            ps.setString(3, name);
+            ps.setString(4, slot);
+            ps.setString(5, region);
+            ps.setInt(6, attackStab);
+            ps.setInt(7, attackSlash);
+            ps.setInt(8, attackCrush);
+            ps.setInt(9, attackMagic);
+            ps.setInt(10, attackRanged);
+            ps.setInt(11, defenceStab);
+            ps.setInt(12, defenceSlash);
+            ps.setInt(13, defenceCrush);
+            ps.setInt(14, defenceMagic);
+            ps.setInt(15, defenceRanged);
+            ps.setInt(16, meleeStrength);
+            ps.setInt(17, magicDamage);
+            ps.setInt(18, rangedStrength);
+            ps.setInt(19, prayerBonus);
+            ps.setDouble(20, weight);
+            ps.setString(21, skillRequirementsJson);
+            ps.setString(22, wikiUrl);
+            if (embedding != null) {
+                ps.setBytes(23, embedding);
+            } else {
+                ps.setNull(23, java.sql.Types.BLOB);
             }
             ps.executeUpdate();
         }

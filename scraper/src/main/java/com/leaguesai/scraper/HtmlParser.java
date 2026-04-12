@@ -67,16 +67,19 @@ public class HtmlParser {
     }
 
     /**
-     * Richer parser for Trailblazer-style task tables. Extracts row attributes
+     * Richer parser for league task tables. Extracts row attributes
      * ({@code data-taskid}, {@code data-tbz-area-for-filtering}) and image metadata
      * (tier icon in the points column) that the text-only parser loses.
      *
      * <p>Returns a list of {@link TaskRow} records with all structured fields.
+     *
+     * <p>NOTE: the {@code table.tbrl-tasks} CSS selector was used by prior leagues.
+     * Verify the Demonic Pacts League wiki page uses the same class on launch day;
+     * if not, update the selector here. The wikitable fallback below covers unknown formats.
      */
     public static List<TaskRow> parseTaskTableRich(String html) {
         List<TaskRow> out = new ArrayList<>();
         Document doc = Jsoup.parse(html);
-        // Only the Trailblazer-style task table has the rich data attributes.
         Elements tables = doc.select("table.tbrl-tasks");
         if (tables.isEmpty()) {
             // Fallback: if no tbrl-tasks class, try all wikitables (older formats)

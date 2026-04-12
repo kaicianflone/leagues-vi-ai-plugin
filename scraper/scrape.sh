@@ -3,8 +3,8 @@
 # If no API key, embeddings are skipped (vector search disabled, but tasks still load).
 #
 # Runs both scrapers in sequence:
-#   1. WikiScraper         — Trailblazer Reloaded tasks (placeholder, phase 2 swaps to Demonic Pacts)
-#   2. DemonicPactsScraper — Leagues VI relics, areas, pacts (phase 1)
+#   1. WikiScraper         — Demonic Pacts League tasks
+#   2. DemonicPactsScraper — Leagues VI relics, areas, pacts
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT="$HOME/.runelite/leagues-ai/data/leagues-vi-tasks.db"
@@ -13,7 +13,7 @@ cd "$SCRIPT_DIR/.."
 
 export JAVA_HOME=/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home
 
-echo "=== [1/2] Tasks scraper (Trailblazer Reloaded placeholder) ==="
+echo "=== [1/2] Tasks scraper (Demonic Pacts League) ==="
 if [ -n "$1" ]; then
     ./gradlew :scraper:run --args="$OUTPUT $1"
 else

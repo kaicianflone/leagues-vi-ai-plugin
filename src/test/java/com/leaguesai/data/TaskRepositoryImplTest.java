@@ -333,6 +333,74 @@ public class TaskRepositoryImplTest {
         assertEquals("Null-id relic dropped", 1, r.getAllRelics().size());
     }
 
+    // --- findByTargetItemId ---
+
+    @Test
+    public void findByTargetItemId_returns_matching_tasks() {
+        Task withItem = Task.builder()
+                .id("task-item")
+                .name("Task with Item")
+                .difficulty(Difficulty.EASY)
+                .area("misthalin")
+                .targetItems(Collections.singletonList(
+                        Task.ItemTarget.builder().id(1234).name("Sword").build()))
+                .build();
+        Task noItem = Task.builder()
+                .id("task-noitem")
+                .name("Task no Item")
+                .difficulty(Difficulty.EASY)
+                .area("misthalin")
+                .build();
+
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Arrays.asList(withItem, noItem),
+                Collections.<Area>emptyList());
+
+        List<Task> result = r.findByTargetItemId(1234);
+        assertEquals(1, result.size());
+        assertEquals("task-item", result.get(0).getId());
+    }
+
+    @Test
+    public void findByTargetItemId_no_prefix_collision() {
+        // id 6570 must NOT match a query for id 657
+        Task task6570 = Task.builder()
+                .id("task-6570")
+                .name("Task 6570")
+                .difficulty(Difficulty.EASY)
+                .area("misthalin")
+                .targetItems(Collections.singletonList(
+                        Task.ItemTarget.builder().id(6570).name("Dragon chainbody").build()))
+                .build();
+        Task task657 = Task.builder()
+                .id("task-657")
+                .name("Task 657")
+                .difficulty(Difficulty.EASY)
+                .area("misthalin")
+                .targetItems(Collections.singletonList(
+                        Task.ItemTarget.builder().id(657).name("Rune sword").build()))
+                .build();
+
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Arrays.asList(task6570, task657),
+                Collections.<Area>emptyList());
+
+        List<Task> result = r.findByTargetItemId(657);
+        assertEquals("Only task-657 should match, not task-6570", 1, result.size());
+        assertEquals("task-657", result.get(0).getId());
+    }
+
+    @Test
+    public void findByTargetItemId_returns_empty_when_no_match() {
+        TaskRepositoryImpl r = new TaskRepositoryImpl(
+                Arrays.asList(taskA, taskB),
+                Collections.<Area>emptyList());
+
+        List<Task> result = r.findByTargetItemId(9999);
+        assertNotNull("Result must not be null", result);
+        assertTrue("Result must be empty for unmatched item id", result.isEmpty());
+    }
+
     // --- Cycle safety test: task with self-referencing prereq ---
 
     @Test

@@ -3,6 +3,8 @@ package com.leaguesai.agent;
 import lombok.Builder;
 import lombok.Value;
 
+import java.util.Set;
+
 /**
  * A parsed, repository-resolved goal. Produced by {@link GoalSpecParser} from
  * the user's chat message or an "Set as goal" click in {@code UnlockablesPanel},
@@ -19,6 +21,10 @@ import lombok.Value;
  * <p>{@code unlockCost} is copied from the target's data row at parse time so
  * the planner doesn't need to re-fetch it. {@code 0} for PACT (no cost) and
  * for targets with a {@code null} / missing cost on the wiki.
+ *
+ * <p>{@code terminalTaskIds} is populated for {@link GoalType#BUILD} goals only.
+ * It contains the set of task IDs that reward each gear slot item in the target
+ * build. {@code null} for all other goal types.
  */
 @Value
 @Builder
@@ -28,4 +34,7 @@ public class GoalSpec {
     String targetName;
     String rawPhrase;
     int unlockCost;
+
+    /** For BUILD goals: the set of task IDs that reward each gear slot item. Null for other goal types. */
+    Set<String> terminalTaskIds;
 }

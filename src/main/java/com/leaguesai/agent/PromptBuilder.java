@@ -2,6 +2,7 @@ package com.leaguesai.agent;
 
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.GearItem;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 import com.leaguesai.data.model.Task;
@@ -177,6 +178,86 @@ public class PromptBuilder {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Full system prompt with gear context block appended.
+     * Use when a build is active or the player asked a gear question.
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
+                                           TaskRepository repo, List<GearItem> relevantGear) {
+        String base = buildSystemPrompt(ctx, relevantTasks, repo);
+        String gearBlock = buildGearContext(relevantGear, ctx);
+        return base + gearBlock;
+    }
+
+    /**
+     * Builds a Markdown gear context block for injection into the system prompt.
+     * Called when a build is activated or gear-related questions are detected.
+     * Renders each item's slot, key stats, and skill requirements so the LLM
+     * can reason about gear choices without hallucinating stats.
+     *
+     * @param relevantItems items to include (ordered by relevance — caller filters/ranks)
+     * @param ctx           player context for cross-referencing equipped items
+     * @return non-null Markdown string; empty string if no items
+     */
+    public static String buildGearContext(List<GearItem> relevantItems, PlayerContext ctx) {
+        if (relevantItems == null || relevantItems.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n## Gear Reference (RAG context — verified wiki stats)\n");
+        sb.append("Use these stats when advising on gear choices. Stats are factual and should not be second-guessed.\n");
+
+        for (GearItem item : relevantItems) {
+            if (item == null) continue;
+            sb.append("### ").append(item.getName())
+              .append(" [").append(item.getSlot()).append("]");
+
+            // Flag if player currently has it equipped
+            if (ctx != null && ctx.getEquipment() != null
+                    && ctx.getEquipment().containsKey(item.getName())) {
+                sb.append(" (currently equipped)");
+            }
+            sb.append("\n");
+
+            // Key offensive stats (only show non-zero)
+            appendStatIfNonZero(sb, "Stab", item.getAttackStab());
+            appendStatIfNonZero(sb, "Slash", item.getAttackSlash());
+            appendStatIfNonZero(sb, "Crush", item.getAttackCrush());
+            appendStatIfNonZero(sb, "Magic atk", item.getAttackMagic());
+            appendStatIfNonZero(sb, "Range atk", item.getAttackRanged());
+            appendStatIfNonZero(sb, "Str bonus", item.getMeleeStrength());
+            appendStatIfNonZero(sb, "Magic dmg", item.getMagicDamage());
+            appendStatIfNonZero(sb, "Range str", item.getRangedStrength());
+            appendStatIfNonZero(sb, "Prayer", item.getPrayerBonus());
+
+            // Key defensive stats (only non-zero)
+            appendStatIfNonZero(sb, "Def stab", item.getDefenceStab());
+            appendStatIfNonZero(sb, "Def slash", item.getDefenceSlash());
+            appendStatIfNonZero(sb, "Def crush", item.getDefenceCrush());
+            appendStatIfNonZero(sb, "Def magic", item.getDefenceMagic());
+            appendStatIfNonZero(sb, "Def range", item.getDefenceRanged());
+
+            // Skill requirements
+            if (item.getSkillRequirements() != null && !item.getSkillRequirements().isEmpty()) {
+                sb.append("- Requires: ");
+                item.getSkillRequirements().forEach((skill, level) ->
+                    sb.append(skill).append(" ").append(level).append(" "));
+                sb.append("\n");
+            }
+
+            if (item.getWikiUrl() != null) {
+                sb.append("- Wiki: ").append(item.getWikiUrl()).append("\n");
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static void appendStatIfNonZero(StringBuilder sb, String label, int value) {
+        if (value != 0) {
+            sb.append("- ").append(label).append(": ").append(value).append("\n");
+        }
     }
 
     /**

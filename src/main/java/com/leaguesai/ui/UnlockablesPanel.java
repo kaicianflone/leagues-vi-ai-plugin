@@ -1,8 +1,11 @@
 package com.leaguesai.ui;
 
+import com.leaguesai.data.GearRepository;
 import com.leaguesai.data.GoalStore;
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.model.Area;
+import com.leaguesai.data.model.GearItem;
+import com.leaguesai.data.model.GearSlot;
 import com.leaguesai.data.model.Pact;
 import com.leaguesai.data.model.Relic;
 
@@ -76,8 +79,10 @@ public class UnlockablesPanel extends JPanel {
 
     private final TaskRepository repo;
     private final GoalStore goalStore;
+    private GearRepository gearRepo;
 
     private Consumer<String> onSetGoal;
+    private Consumer<GearItem> onSetGearGoal;
 
     /**
      * Tracks which collapsible sections were open before the last rebuild so
@@ -105,6 +110,17 @@ public class UnlockablesPanel extends JPanel {
         this.onSetGoal = callback;
     }
 
+    /** Provide gear data for the Gear accordion section. Call before or after construction; triggers a rebuild. */
+    public void setGearRepository(GearRepository repo) {
+        this.gearRepo = repo;
+        rebuild();
+    }
+
+    /** Callback fired when the user clicks "Set as goal" on a gear item. */
+    public void setOnSetGearGoal(Consumer<GearItem> callback) {
+        this.onSetGearGoal = callback;
+    }
+
     /**
      * Rebuild all three sections from the repo. Called once at construction;
      * can be called again after the scraper has been re-run to refresh the
@@ -116,6 +132,7 @@ public class UnlockablesPanel extends JPanel {
             JPanel relicsSection = buildRelicsSection();
             JPanel areasSection = buildAreasSection();
             JPanel pactsSection = buildPactsSection();
+            JPanel gearSection  = buildGearSection();
 
             // Every child in a BoxLayout.Y_AXIS parent must have LEFT
             // alignmentX, otherwise Swing centers rows against the widest
@@ -123,12 +140,15 @@ public class UnlockablesPanel extends JPanel {
             relicsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
             areasSection.setAlignmentX(Component.LEFT_ALIGNMENT);
             pactsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+            gearSection.setAlignmentX(Component.LEFT_ALIGNMENT);
 
             add(relicsSection);
             add(leftAlignedStrut(4));
             add(areasSection);
             add(leftAlignedStrut(4));
             add(pactsSection);
+            add(leftAlignedStrut(4));
+            add(gearSection);
             revalidate();
             repaint();
         });
@@ -260,6 +280,118 @@ public class UnlockablesPanel extends JPanel {
                 + selected + "/" + GoalStore.MAX_PACT_SLOTS
                 + " \u2022 respecs: " + remainingRespecs + ")";
         return buildCollapsible(title, child);
+    }
+
+    // Region display order — "" = no region / starter gear shown first.
+    private static final String[] GEAR_REGION_ORDER = {
+        "", "Varlamore", "Karamja",
+        "Asgarnia", "Desert", "Fremennik", "Kandarin",
+        "Kebos_and_Kourend", "Morytania", "Tirannwn", "Wilderness"
+    };
+
+    private JPanel buildGearSection() {
+        List<GearItem> items = gearRepo != null ? gearRepo.listAll() : java.util.Collections.emptyList();
+
+        // Group by region key preserving GEAR_REGION_ORDER.
+        Map<String, JPanel> regionGroups = new LinkedHashMap<>();
+        for (String region : GEAR_REGION_ORDER) {
+            regionGroups.put(region, newGroupPanel(gearAreaDisplayName(region)));
+        }
+
+        int count = 0;
+        for (GearItem item : items) {
+            String region = item.getRegion() != null ? item.getRegion() : "";
+            JPanel grp = regionGroups.computeIfAbsent(region, k -> newGroupPanel(gearAreaDisplayName(k)));
+            String meta = buildGearMeta(item);
+            grp.add(makeGearRow(item, meta));
+            count++;
+        }
+
+        JPanel child = newChildColumn();
+        for (Map.Entry<String, JPanel> entry : regionGroups.entrySet()) {
+            if (entry.getValue().getComponentCount() > 1) {
+                child.add(entry.getValue());
+                child.add(leftAlignedStrut(2));
+            }
+        }
+        if (items.isEmpty()) {
+            child.add(emptyLabel("No gear loaded — run scraper."));
+        }
+
+        return buildCollapsible("Gear (" + count + ")", child);
+    }
+
+    private static String gearAreaDisplayName(String region) {
+        if (region == null || region.isEmpty()) return "Starter Areas";
+        switch (region) {
+            case "Kebos_and_Kourend": return "Kebos & Kourend";
+            default: return region.replace("_", " ");
+        }
+    }
+
+    private JPanel makeGearRow(GearItem item, String meta) {
+        JPanel row = new JPanel(new BorderLayout(4, 0));
+        row.setBackground(ROW_BG);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER),
+                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+
+        JPanel right = new JPanel();
+        right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
+        right.setOpaque(false);
+        right.setPreferredSize(new Dimension(60, 30));
+
+        JLabel setGoalLink = new JLabel("Set as goal", SwingConstants.RIGHT);
+        setGoalLink.setForeground(BUTTON_FG);
+        setGoalLink.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        setGoalLink.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        setGoalLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        setGoalLink.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (onSetGearGoal != null) onSetGearGoal.accept(item);
+            }
+        });
+
+        right.add(setGoalLink);
+
+        String safeTitle = escapeHtml(item.getName());
+        String safeMeta = escapeHtml(meta);
+        JLabel textLabel = new JLabel(
+                "<html><div style='width:130px'>"
+                        + "<b style='color:#DCDCDC'>" + safeTitle + "</b>"
+                        + (safeMeta.isEmpty()
+                                ? ""
+                                : "<br><span style='color:#969696;font-size:9px'>" + safeMeta + "</span>")
+                        + "</div></html>");
+        textLabel.setForeground(HEADER_FG);
+        textLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        textLabel.setVerticalAlignment(SwingConstants.TOP);
+
+        row.add(textLabel, BorderLayout.CENTER);
+        row.add(right, BorderLayout.EAST);
+        return row;
+    }
+
+    private static String slotDisplayName(GearSlot slot) {
+        String raw = slot.name();
+        return Character.toUpperCase(raw.charAt(0)) + raw.substring(1).toLowerCase();
+    }
+
+    /** Returns "Slot · skill req" meta string shown under each gear row name. */
+    private static String buildGearMeta(GearItem item) {
+        String slotPart = item.getSlot() != null ? slotDisplayName(item.getSlot()) : "";
+        if (item.getSkillRequirements() == null || item.getSkillRequirements().isEmpty()) {
+            return slotPart;
+        }
+        StringBuilder sb = new StringBuilder(slotPart);
+        for (Map.Entry<String, Integer> req : item.getSkillRequirements().entrySet()) {
+            if (sb.length() > 0) sb.append(" \u00B7 ");
+            sb.append(capitalize(req.getKey())).append(" ").append(req.getValue());
+        }
+        return sb.toString();
     }
 
     private static String capitalize(String s) {
