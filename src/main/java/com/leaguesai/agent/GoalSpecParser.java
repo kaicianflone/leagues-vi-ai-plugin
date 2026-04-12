@@ -138,20 +138,28 @@ public final class GoalSpecParser {
             String lower = trimmed.toLowerCase();
 
             // Relic: "... grimoire relic ..." / "unlock the grimoire"
+            // Longest-match: pick the relic whose name is longest and contained in the phrase,
+            // so "Greater Grimoire" beats "Grimoire" when both names appear in the list.
             if (lower.contains("relic")) {
                 List<Relic> relics = repo.getAllRelics();
                 if (relics != null) {
+                    Relic best = null;
                     for (Relic r : relics) {
                         if (r != null && r.getName() != null
                                 && lower.contains(r.getName().toLowerCase())) {
-                            return GoalSpec.builder()
-                                    .type(GoalType.RELIC)
-                                    .targetId(r.getId())
-                                    .targetName(r.getName())
-                                    .rawPhrase(phrase)
-                                    .unlockCost(r.getUnlockCost())
-                                    .build();
+                            if (best == null || r.getName().length() > best.getName().length()) {
+                                best = r;
+                            }
                         }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.RELIC)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(best.getUnlockCost())
+                                .build();
                     }
                 }
             }
@@ -160,17 +168,23 @@ public final class GoalSpecParser {
             if (lower.contains("pact")) {
                 List<Pact> pacts = repo.getAllPacts();
                 if (pacts != null) {
+                    Pact best = null;
                     for (Pact p : pacts) {
                         if (p != null && p.getName() != null
                                 && lower.contains(p.getName().toLowerCase())) {
-                            return GoalSpec.builder()
-                                    .type(GoalType.PACT)
-                                    .targetId(p.getId())
-                                    .targetName(p.getName())
-                                    .rawPhrase(phrase)
-                                    .unlockCost(0)
-                                    .build();
+                            if (best == null || p.getName().length() > best.getName().length()) {
+                                best = p;
+                            }
                         }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.PACT)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(0)
+                                .build();
                     }
                 }
             }
@@ -179,17 +193,23 @@ public final class GoalSpecParser {
             if (lower.contains("unlock") || lower.contains("area")) {
                 List<Area> areas = repo.getAllAreas();
                 if (areas != null) {
+                    Area best = null;
                     for (Area a : areas) {
                         if (a != null && a.getName() != null
                                 && lower.contains(a.getName().toLowerCase())) {
-                            return GoalSpec.builder()
-                                    .type(GoalType.AREA)
-                                    .targetId(a.getId())
-                                    .targetName(a.getName())
-                                    .rawPhrase(phrase)
-                                    .unlockCost(a.getUnlockCost())
-                                    .build();
+                            if (best == null || a.getName().length() > best.getName().length()) {
+                                best = a;
+                            }
                         }
+                    }
+                    if (best != null) {
+                        return GoalSpec.builder()
+                                .type(GoalType.AREA)
+                                .targetId(best.getId())
+                                .targetName(best.getName())
+                                .rawPhrase(phrase)
+                                .unlockCost(best.getUnlockCost())
+                                .build();
                     }
                 }
             }
@@ -203,22 +223,16 @@ public final class GoalSpecParser {
             boolean hasItemKeyword = lowerPhrase.contains("get ") || lowerPhrase.contains("need ")
                     || lowerPhrase.contains("make ") || lowerPhrase.contains("craft ")
                     || lowerPhrase.contains("smith ") || lowerPhrase.contains("fletch ")
-                    || lowerPhrase.contains("brew ") || lowerPhrase.contains("cook ");
+                    || lowerPhrase.contains("brew ") || lowerPhrase.contains("cook ")
+                    || lowerPhrase.contains("want ") || lowerPhrase.contains("farm ")
+                    || lowerPhrase.contains("obtain ") || lowerPhrase.contains("i need")
+                    || lowerPhrase.contains("i want") || lowerPhrase.startsWith("get ")
+                    || lowerPhrase.startsWith("need ");
             if (hasItemKeyword) {
-                // Scan all known item names and check if the phrase contains them.
-                // findItemByName() does an exact key lookup and can't match partial phrases
-                // like "i need dragon scimitar" against the key "dragon scimitar".
-                com.leaguesai.data.model.ItemDependency found = null;
-                int bestLen = 0;
-                for (String knownName : itemGraph.knownNames()) {
-                    if (knownName.length() > bestLen && lowerPhrase.contains(knownName)) {
-                        com.leaguesai.data.model.ItemDependency candidate = itemGraph.findItemByName(knownName);
-                        if (candidate != null) {
-                            found = candidate;
-                            bestLen = knownName.length();
-                        }
-                    }
-                }
+                // findLongestMatchingItem uses a pre-sorted (longest-first) name list
+                // and returns on the first match — O(k) not O(n).
+                com.leaguesai.data.model.ItemDependency found =
+                        itemGraph.findLongestMatchingItem(lowerPhrase);
                 if (found != null) {
                     return GoalSpec.builder()
                             .type(GoalType.ITEM)

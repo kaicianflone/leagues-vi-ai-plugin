@@ -156,11 +156,15 @@ public class LeaguesAiPlugin extends Plugin {
         // Initialise the database seeder (seeds on first run before loading)
         databaseSeeder = new DatabaseSeeder();
 
+        // Wire panel callbacks BEFORE submitting async load. This guarantees that
+        // restoreSavedSession (called at the end of loadDatabaseAsync) fires after
+        // all plan/session callbacks are already registered, eliminating a race
+        // where a fast-loading DB could invoke SwingUtilities.invokeLater before
+        // the listeners are wired.
+        setupPanelCallbacks();
+
         // Async load the database so the game thread is not blocked
         llmExecutor.submit(this::loadDatabaseAsync);
-
-        // Wire panel callbacks (services may still be null until load finishes — guarded inside)
-        setupPanelCallbacks();
 
         // Wire sign-in button (legacy settings panel button — still works as fallback)
         panel.getSettingsPanel().setOnSignIn(this::launchCodexLogin);
@@ -782,9 +786,8 @@ public class LeaguesAiPlugin extends Plugin {
                         panel.setProgress(0, total);
                         panel.switchToGoalsTab();
                     }
-                    PlannedStep first = finalSteps.get(0);
-                    if (first != null && overlayController != null) {
-                        overlayController.setActiveStep(first);
+                    if (!finalSteps.isEmpty() && overlayController != null) {
+                        overlayController.setActiveStep(finalSteps.get(0));
                     }
                 });
                 log.info("activateBuild: activated '{}' with {} steps", buildName, total);
@@ -943,11 +946,14 @@ public class LeaguesAiPlugin extends Plugin {
             bp.setOnBackToGoals(() -> panel.switchToGoalsTab());
 
             bp.setOnActivate(build -> {
-                // Called on background thread from BuildsPanel's internal executor
-                boolean ok = activateBuild(build);
-                SwingUtilities.invokeLater(() -> {
-                    if (ok) bp.showToast("Build activated.");
-                    if (buildStore != null) bp.refreshBuilds(buildStore);
+                // Route through llmExecutor so activateBuild serializes with in-flight
+                // chat plans — both write to GoalStore/currentPlan and must not race.
+                llmExecutor.submit(() -> {
+                    boolean ok = activateBuild(build);
+                    SwingUtilities.invokeLater(() -> {
+                        if (ok) bp.showToast("Build activated.");
+                        if (buildStore != null) bp.refreshBuilds(buildStore);
+                    });
                 });
             });
 

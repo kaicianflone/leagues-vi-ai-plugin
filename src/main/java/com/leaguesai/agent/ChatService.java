@@ -211,6 +211,12 @@ public class ChatService {
         planGeneration.incrementAndGet();
     }
 
+    /** Package-private: returns the current plan generation counter. Tests use this to
+     *  verify that {@link #cancelPendingPlan()} actually increments the counter. */
+    long getPlanGeneration() {
+        return planGeneration.get();
+    }
+
     /**
      * Clear the conversation history (in-memory and persisted store).
      */
@@ -282,6 +288,20 @@ public class ChatService {
                 if (lower.contains(phrase)) {
                     triggered = true;
                     break;
+                }
+            }
+        }
+
+        // Item-intent: "get X", "i need X", "farm X", etc. Only trigger when the
+        // itemDependencyGraph is loaded AND an actual known item name appears in
+        // the phrase, so "I need to level up" doesn't trigger the planner.
+        if (!triggered && itemDependencyGraph != null && !itemDependencyGraph.isEmpty()) {
+            if (lower.contains("get ") || lower.contains("need ") || lower.contains("want ")
+                    || lower.contains("farm ") || lower.contains("craft ") || lower.contains("obtain ")
+                    || lower.contains("i need") || lower.contains("i want")
+                    || lower.startsWith("get ") || lower.startsWith("need ")) {
+                if (itemDependencyGraph.findLongestMatchingItem(lower) != null) {
+                    triggered = true;
                 }
             }
         }

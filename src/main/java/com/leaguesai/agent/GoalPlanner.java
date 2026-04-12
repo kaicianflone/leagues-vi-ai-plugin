@@ -340,10 +340,11 @@ public class GoalPlanner {
         // For each dependency node, see if there's a matching Leagues task.
         Set<String> completed = ctx != null && ctx.getCompletedTasks() != null
                 ? ctx.getCompletedTasks() : Collections.emptySet();
+        List<Task> allTasks = taskRepo.getAllTasks();  // hoist: O(1) instead of O(deps.size())
         List<Task> matched = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         for (com.leaguesai.data.model.ItemDependency dep : deps) {
-            List<Task> tasks = findByTargetItemName(dep.getItemName());
+            List<Task> tasks = findByTargetItemName(dep.getItemName(), allTasks);
             if (tasks != null) {
                 for (Task t : tasks) {
                     if (t != null && !seen.contains(t.getId()) && !completed.contains(t.getId())) {
@@ -369,12 +370,15 @@ public class GoalPlanner {
     /**
      * Finds tasks whose {@code targetItems} list contains an item with the given
      * display name (case-insensitive substring match).
+     *
+     * @param allTasks pre-fetched task list — callers must hoist {@code taskRepo.getAllTasks()}
+     *                 outside any loop to avoid O(n) lookups per invocation.
      */
-    private List<Task> findByTargetItemName(String itemName) {
-        if (itemName == null) return Collections.emptyList();
+    private List<Task> findByTargetItemName(String itemName, List<Task> allTasks) {
+        if (itemName == null || allTasks == null) return Collections.emptyList();
         String lower = itemName.toLowerCase();
         List<Task> result = new ArrayList<>();
-        for (Task t : taskRepo.getAllTasks()) {
+        for (Task t : allTasks) {
             if (t.getTargetItems() != null) {
                 for (com.leaguesai.data.model.Task.ItemTarget it : t.getTargetItems()) {
                     if (it != null && it.getName() != null

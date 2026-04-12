@@ -262,6 +262,121 @@ public class GoalStoreTest {
         assertTrue(store.getPactGoals().isEmpty());
     }
 
+    // ----- PR 3: gear goal queue -------------------------------------------
+
+    @Test
+    public void gearGoalRoundTrip() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertFalse(store.isGearGoal("infernal_cape"));
+        assertTrue(store.getGearGoals().isEmpty());
+
+        store.addGearGoal("infernal_cape");
+        assertTrue(store.isGearGoal("infernal_cape"));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertTrue("gear goal persists to disk", reloaded.isGearGoal("infernal_cape"));
+    }
+
+    @Test
+    public void gearGoalRemove() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+        store.addGearGoal("infernal_cape");
+        store.removeGearGoal("infernal_cape");
+        assertFalse(store.isGearGoal("infernal_cape"));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertFalse(reloaded.isGearGoal("infernal_cape"));
+    }
+
+    @Test
+    public void gearGoalNullAndEmptyIgnored() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        store.addGearGoal(null);
+        store.addGearGoal("");
+        assertTrue(store.getGearGoals().isEmpty());
+        assertFalse(store.isGearGoal(null));
+    }
+
+    @Test
+    public void getTotalGoalCount_countsAllFourSets() {
+        GoalStore store = new GoalStore(new File(tmp.getRoot(), "goals.json"));
+        assertEquals(0, store.getTotalGoalCount());
+
+        store.addRelicGoal("r1");
+        store.addAreaGoal("a1");
+        store.addPactGoal("p1");
+        store.addGearGoal("g1");
+
+        assertEquals(4, store.getTotalGoalCount());
+        store.removeRelicGoal("r1");
+        assertEquals(3, store.getTotalGoalCount());
+    }
+
+    @Test
+    public void clearAllGoals_wipesEverythingAndNullsPlan() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        store.addRelicGoal("r1");
+        store.addAreaGoal("a1");
+        store.addPactGoal("p1");
+        store.addGearGoal("g1");
+        store.saveCurrentPlan("My Plan", Arrays.asList("task1", "task2"));
+
+        store.clearAllGoals();
+
+        assertTrue(store.getRelicGoals().isEmpty());
+        assertTrue(store.getAreaGoals().isEmpty());
+        assertTrue(store.getPactGoals().isEmpty());
+        assertTrue(store.getGearGoals().isEmpty());
+        assertNull("clearAllGoals must null currentGoalText", store.getCurrentGoalText());
+        assertNull("clearAllGoals must null currentPlanTaskIds", store.getCurrentPlanTaskIds());
+        assertEquals(0, store.getTotalGoalCount());
+
+        // Verify nulls survive restart — no ghost plan on next load.
+        GoalStore reloaded = new GoalStore(f);
+        assertNull(reloaded.getCurrentGoalText());
+        assertNull(reloaded.getCurrentPlanTaskIds());
+    }
+
+    // ----- Session plan persistence ----------------------------------------
+
+    @Test
+    public void saveCurrentPlan_roundTrip() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+
+        assertNull(store.getCurrentGoalText());
+        assertNull(store.getCurrentPlanTaskIds());
+
+        store.saveCurrentPlan("Unlock Grimoire", Arrays.asList("t1", "t2", "t3"));
+        assertEquals("Unlock Grimoire", store.getCurrentGoalText());
+        assertEquals(3, store.getCurrentPlanTaskIds().size());
+        assertEquals("t1", store.getCurrentPlanTaskIds().get(0));
+
+        GoalStore reloaded = new GoalStore(f);
+        assertEquals("Unlock Grimoire", reloaded.getCurrentGoalText());
+        assertEquals(Arrays.asList("t1", "t2", "t3"), reloaded.getCurrentPlanTaskIds());
+    }
+
+    @Test
+    public void clearCurrentPlan_nullsFieldsAndPersists() throws Exception {
+        File f = new File(tmp.getRoot(), "goals.json");
+        GoalStore store = new GoalStore(f);
+        store.saveCurrentPlan("Goal", Arrays.asList("t1"));
+        store.clearCurrentPlan();
+
+        assertNull(store.getCurrentGoalText());
+        assertNull(store.getCurrentPlanTaskIds());
+
+        GoalStore reloaded = new GoalStore(f);
+        assertNull(reloaded.getCurrentGoalText());
+        assertNull(reloaded.getCurrentPlanTaskIds());
+    }
+
     @Test
     public void migrationFromPhase1JsonWithoutNewFields() throws Exception {
         // Simulate a goals.json written by the Phase 1 GoalStore — no

@@ -216,6 +216,10 @@ public class GoalSpecParserTest {
                 .obtainMethod(ObtainMethod.DROPPED)
                 .build();
         when(graph.findItemByName(itemName)).thenReturn(dep);
+        // GoalSpecParser now routes through findLongestMatchingItem; stub it for any
+        // phrase that contains the item name.
+        when(graph.findLongestMatchingItem(org.mockito.ArgumentMatchers.contains(itemName)))
+                .thenReturn(dep);
         return graph;
     }
 

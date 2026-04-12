@@ -3,7 +3,6 @@ package com.leaguesai.agent;
 import com.leaguesai.data.model.ItemDependency;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.inject.Singleton;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -33,7 +32,6 @@ import java.util.Set;
  * the same way DatabaseLoader is constructed.
  */
 @Slf4j
-@Singleton
 public class ItemDependencyGraph {
 
     /** Maximum BFS depth to prevent runaway expansion on malformed/circular data. */
@@ -46,6 +44,13 @@ public class ItemDependencyGraph {
 
     /** Normalized lowercase item name / slug → itemId. */
     private volatile Map<String, String> nameToId = Collections.emptyMap();
+
+    /**
+     * All known item names sorted longest-first. Cached after {@link #loadFromDb()} so
+     * {@link #findLongestMatchingItem} can break on the first match instead of
+     * iterating every name to find the longest one.
+     */
+    private volatile List<String> sortedNamesLongestFirst = Collections.emptyList();
 
     public ItemDependencyGraph(File dbFile) {
         this.dbFile = dbFile;
@@ -146,6 +151,11 @@ public class ItemDependencyGraph {
             this.graph = Collections.unmodifiableMap(immutableGraph);
             this.nameToId = Collections.unmodifiableMap(newNameToId);
 
+            // Pre-sort names longest-first so findLongestMatchingItem can break on first match.
+            List<String> sorted = new ArrayList<>(newNameToId.keySet());
+            sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
+            this.sortedNamesLongestFirst = Collections.unmodifiableList(sorted);
+
             log.info("ItemDependencyGraph: loaded {} item dependencies ({} unique items)",
                     totalRows, this.graph.size());
 
@@ -238,6 +248,28 @@ public class ItemDependencyGraph {
             return null;
         }
         return deps.get(0);
+    }
+
+    /**
+     * Scans {@code lowerPhrase} for the longest item name it contains and returns
+     * the corresponding {@link ItemDependency}, or {@code null} if no known item
+     * name appears in the phrase.
+     *
+     * <p>Uses a pre-sorted (longest-first) name list so the first match found is
+     * always the longest — O(k) where k is the index of the match rather than
+     * O(n) over the full name set.
+     *
+     * @param lowerPhrase the search phrase, already lowercased and trimmed
+     */
+    public ItemDependency findLongestMatchingItem(String lowerPhrase) {
+        if (lowerPhrase == null || lowerPhrase.isEmpty()) return null;
+        for (String name : sortedNamesLongestFirst) {
+            if (lowerPhrase.contains(name)) {
+                ItemDependency dep = findItemByName(name);
+                if (dep != null) return dep;
+            }
+        }
+        return null;
     }
 
     /**

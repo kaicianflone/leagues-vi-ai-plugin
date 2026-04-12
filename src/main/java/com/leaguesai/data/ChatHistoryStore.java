@@ -3,6 +3,7 @@ package com.leaguesai.data;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
@@ -12,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+
+@Slf4j
 
 /**
  * Persists chat conversation history to disk so the user's session survives
@@ -71,7 +74,7 @@ public class ChatHistoryStore {
             Files.write(tmp.toPath(), GSON.toJson(toWrite).getBytes(StandardCharsets.UTF_8));
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            // Best-effort — plugin must not crash because the filesystem is full.
+            log.warn("ChatHistoryStore: failed to save chat history — {}", e.getMessage());
         }
     }
 

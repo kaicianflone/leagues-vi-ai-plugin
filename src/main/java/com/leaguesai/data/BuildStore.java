@@ -118,7 +118,14 @@ public class BuildStore {
      * @return the first build from the imported file
      * @throws IllegalArgumentException on any validation failure
      */
+    /** Maximum import file size (1 MB). Guards against OOM on malicious/corrupt files. */
+    private static final long MAX_IMPORT_FILE_BYTES = 1024 * 1024;
+
     public synchronized Build importFromFile(File file) {
+        if (file.length() > MAX_IMPORT_FILE_BYTES) {
+            throw new IllegalArgumentException(
+                    "Invalid build file: file is too large (max 1 MB)");
+        }
         String json;
         try {
             json = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
@@ -175,11 +182,18 @@ public class BuildStore {
             imported.add(build);
         }
 
+        if (imported.isEmpty()) {
+            throw new IllegalArgumentException("Invalid build file: no valid builds found");
+        }
+
         // Merge into saved map (imported overwrites local)
         for (Build b : imported) {
             savedBuilds.put(b.getId(), b);
         }
-        persist(savedBuilds.values());
+        if (!persist(savedBuilds.values())) {
+            throw new IllegalArgumentException(
+                    "Build validated but could not be saved to disk — check disk space");
+        }
 
         return imported.get(0);
     }
@@ -246,8 +260,13 @@ public class BuildStore {
         return map;
     }
 
-    private void persist(Collection<Build> builds) {
-        if (savesFile == null) return;
+    /**
+     * Persists builds to disk. Returns {@code true} on success, {@code false} on
+     * I/O failure (failure is also logged). Callers that need to surface a disk
+     * failure to the user (e.g. importFromFile) should check the return value.
+     */
+    private boolean persist(Collection<Build> builds) {
+        if (savesFile == null) return true;  // no-op, not a failure
         File parent = savesFile.getParentFile();
         if (parent != null && !parent.exists()) {
             parent.mkdirs();
@@ -258,10 +277,10 @@ public class BuildStore {
             File tmp = new File(savesFile.getParentFile(), savesFile.getName() + ".tmp");
             Files.write(tmp.toPath(), GSON.toJson(wrapper).getBytes(StandardCharsets.UTF_8));
             Files.move(tmp.toPath(), savesFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            return true;
         } catch (IOException e) {
-            // Swallow — build state is best-effort. Plugin must not crash because
-            // the filesystem is full or the directory is not writable.
             log.warn("BuildStore: failed to persist builds — {}", e.getMessage());
+            return false;
         }
     }
 

@@ -63,18 +63,28 @@ public class ProximityOptimizer {
         }
 
         // --- 2. Assign topological levels ---
-        // level[i] = max(level[prereq] + 1) for each prereq of step i that
-        // appears in the plan; 0 when no in-plan prerequisites exist.
+        // level[i] = max(level[prereq] + 1) for each prereq of step i.
+        // Iterate to convergence so forward references (prereq appearing later
+        // in the list than its dependent) are handled correctly. The loop runs
+        // at most steps.size() times but typically converges in 2–3 passes.
         int[] levels = new int[steps.size()];
-        for (int i = 0; i < steps.size(); i++) {
-            PlannedStep s = steps.get(i);
-            if (s == null || s.getTask() == null || s.getTask().getTasksRequired() == null) {
-                continue;
-            }
-            for (String prereqId : s.getTask().getTasksRequired()) {
-                Integer prereqIdx = idToIndex.get(prereqId);
-                if (prereqIdx != null) {
-                    levels[i] = Math.max(levels[i], levels[prereqIdx] + 1);
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < steps.size(); i++) {
+                PlannedStep s = steps.get(i);
+                if (s == null || s.getTask() == null || s.getTask().getTasksRequired() == null) {
+                    continue;
+                }
+                for (String prereqId : s.getTask().getTasksRequired()) {
+                    Integer prereqIdx = idToIndex.get(prereqId);
+                    if (prereqIdx != null) {
+                        int candidate = levels[prereqIdx] + 1;
+                        if (candidate > levels[i]) {
+                            levels[i] = candidate;
+                            changed = true;
+                        }
+                    }
                 }
             }
         }
