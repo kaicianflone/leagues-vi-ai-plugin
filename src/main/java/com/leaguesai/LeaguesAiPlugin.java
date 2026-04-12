@@ -92,6 +92,11 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile ProximityOptimizer proximityOptimizer;
     private volatile ChatHistoryStore chatHistoryStore;
     private volatile ItemDependencyGraph itemDependencyGraph;
+    private volatile UserPreferences userPreferences;
+
+    /** Preferences file — model + persona selection persisted across sessions. */
+    private static final File PREFS_FILE = new File(System.getProperty("user.home"),
+            ".runelite/leagues-ai/preferences.json");
 
     /**
      * Set to true at the very top of {@link #shutDown()}. Any in-flight
@@ -203,6 +208,19 @@ public class LeaguesAiPlugin extends Plugin {
             buildExpander = new BuildExpander(gearRepository, taskRepo, goalPlanner);
             proximityOptimizer = new ProximityOptimizer();
 
+            // Load user preferences (model + persona selection)
+            UserPreferences prefs = UserPreferences.load(PREFS_FILE);
+            userPreferences = prefs;
+            String selectedModel = prefs.getModel();
+            log.info("User preferences loaded — model: {}, personas: {}",
+                    selectedModel, prefs.getSelectedPersonas());
+
+            // Push prefs to settings panel so checkboxes + dropdown reflect saved state
+            SwingUtilities.invokeLater(() -> {
+                panel.getSettingsPanel().setSelectedModel(selectedModel);
+                panel.getSettingsPanel().setSelectedPersonas(prefs.getSelectedPersonas());
+            });
+
             String apiKey = config.openaiApiKey();
             LlmClient previous = openAiClient;
 
@@ -211,19 +229,19 @@ public class LeaguesAiPlugin extends Plugin {
             boolean codexMode = false;
             try {
                 if (CodexAuthStore.hasValidAuth()) {
-                    log.info("Using ChatGPT OAuth auth (found ~/.codex/auth.json)");
-                    newClient = new CodexOauthClient("gpt-5-codex");
+                    log.info("Using ChatGPT OAuth auth (found ~/.codex/auth.json), model: {}", selectedModel);
+                    newClient = new CodexOauthClient(selectedModel);
                     codexMode = true;
                 } else {
                     if (apiKey == null || apiKey.isEmpty()) {
                         log.warn("No OpenAI API key and no Codex auth — chat will not work");
                     }
-                    log.info("Using OpenAI API key auth");
-                    newClient = new OpenAiClient(apiKey, config.openaiModel());
+                    log.info("Using OpenAI API key auth, model: {}", selectedModel);
+                    newClient = new OpenAiClient(apiKey, selectedModel);
                 }
             } catch (Exception e) {
                 log.error("Failed to initialize LLM client", e);
-                newClient = new OpenAiClient(apiKey == null ? "" : apiKey, config.openaiModel());
+                newClient = new OpenAiClient(apiKey == null ? "" : apiKey, selectedModel);
             }
 
             openAiClient = newClient;
@@ -232,6 +250,7 @@ public class LeaguesAiPlugin extends Plugin {
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
             chatService.setItemDependencyGraph(itemDependencyGraph);
             chatService.setProximityOptimizer(proximityOptimizer);
+            chatService.setUserPreferences(prefs);
             File chatHistoryFile = new File(System.getProperty("user.home"),
                 ".runelite/leagues-ai/data/chat-history.json");
             chatHistoryStore = new ChatHistoryStore(chatHistoryFile);
@@ -331,13 +350,15 @@ public class LeaguesAiPlugin extends Plugin {
                 if (success) {
                     log.info("Codex login detected, rebuilding LLM client");
                     LlmClient old = openAiClient;
-                    LlmClient newClient = new CodexOauthClient("gpt-5-codex");
+                    String model = userPreferences != null ? userPreferences.getModel() : UserPreferences.DEFAULT_MODEL;
+                    LlmClient newClient = new CodexOauthClient(model);
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
                         chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
                         chatService.setItemDependencyGraph(this.itemDependencyGraph);
                         chatService.setProximityOptimizer(proximityOptimizer);
                         chatService.setHistoryStore(chatHistoryStore);
+                        chatService.setUserPreferences(userPreferences);
                         attachPlanCallback(chatService);
                         coachPulseService = new CoachPulseService(newClient, contextAssembler);
                         rebuildHeartbeatTicker();
@@ -495,44 +516,173 @@ public class LeaguesAiPlugin extends Plugin {
     }
 
     /**
-     * Fire the planner for all currently staged goals (gear + relics + areas + pacts).
-     * Sends a natural-language message to ChatService so the LLM generates a real plan
-     * and it appears in chat + GoalsPanel. Called on llmExecutor.
+     * Resolve all staged goals directly through the planner and push the combined
+     * plan into the Goals panel + overlays. Called on llmExecutor.
+     *
+     * <p>Each staged goal is resolved to a {@link GoalSpec} individually so the
+     * planner can handle the correct goal type (ITEM / RELIC / AREA / PACT). Tasks
+     * from all goals are combined, deduplicated, topologically sorted, and passed
+     * to {@link #activatePlan} — the same path that the ChatService plan callback
+     * uses, so the UI update is identical.
      */
     private void planAllStagedGoals() {
-        if (goalStore == null || chatService == null) return;
+        if (goalStore == null || goalPlanner == null) return;
+        if (chatService == null) {
+            SwingUtilities.invokeLater(() -> panel.setStatus("Not ready yet — wait a moment."));
+            return;
+        }
         int total = goalStore.getTotalGoalCount();
         if (total == 0) {
             SwingUtilities.invokeLater(() -> panel.setStatus("No goals staged yet."));
             return;
         }
 
-        StringBuilder sb = new StringBuilder("plan ");
-        java.util.List<String> parts = new java.util.ArrayList<>();
-
-        if (gearRepository != null && !goalStore.getGearGoals().isEmpty()) {
-            java.util.List<String> gearNames = new java.util.ArrayList<>();
-            for (String id : goalStore.getGearGoals()) {
-                com.leaguesai.data.model.GearItem g = gearRepository.findById(id);
-                gearNames.add(g != null ? g.getName() : id);
-            }
-            parts.add("get gear: " + String.join(", ", gearNames));
-        }
-        for (String id : goalStore.getRelicGoals()) parts.add("unlock relic " + id);
-        for (String id : goalStore.getAreaGoals()) parts.add("unlock area " + id);
-        for (String id : goalStore.getPactGoals()) parts.add("unlock pact " + id);
-        sb.append(String.join("; ", parts));
-        sb.append(" — give me an ordered task list for Leagues VI Demonic Pacts");
-
-        String planPhrase = sb.toString();
-        log.info("planAllStagedGoals: sending '{}' to ChatService", planPhrase);
         try {
-            String response = chatService.sendMessage(planPhrase);
-            if (response != null && !response.isEmpty()) {
-                SwingUtilities.invokeLater(() -> {
-                    panel.switchToGoalsTab();
-                });
+            PlayerContext ctx = contextAssembler.assemble();
+            java.util.List<Task> allTasks = new java.util.ArrayList<>();
+            java.util.Set<String> seenIds = new java.util.LinkedHashSet<>();
+            java.util.List<String> goalNames = new java.util.ArrayList<>();
+
+            // --- Gear goals → GoalType.ITEM ---
+            for (String gearId : goalStore.getGearGoals()) {
+                com.leaguesai.data.model.GearItem g = gearRepository != null ? gearRepository.findById(gearId) : null;
+                String name = g != null ? g.getName() : gearId;
+                goalNames.add(name);
+
+                // Try item dependency graph first (gives a proper prereq chain)
+                if (itemDependencyGraph != null && !itemDependencyGraph.isEmpty()) {
+                    com.leaguesai.data.model.ItemDependency found =
+                            itemDependencyGraph.findLongestMatchingItem(name.toLowerCase());
+                    if (found != null) {
+                        GoalSpec spec = GoalSpec.builder()
+                                .type(GoalType.ITEM)
+                                .targetId(found.getItemId())
+                                .targetName(found.getItemName())
+                                .rawPhrase("get " + name)
+                                .unlockCost(0)
+                                .build();
+                        try {
+                            CompositeGoal cg = goalPlanner.resolveCompositeGoal(spec, ctx);
+                            for (Task t : cg.getTaskBatch()) {
+                                if (t != null && t.getId() != null && seenIds.add(t.getId())) allTasks.add(t);
+                            }
+                            continue;
+                        } catch (Exception ex) {
+                            log.warn("planAllStagedGoals: item graph resolution failed for '{}': {}", name, ex.getMessage());
+                        }
+                    }
+                }
+                // Fallback: keyword task search for this individual item name
+                try {
+                    java.util.List<Task> found = goalPlanner.resolveGoalTasks("get " + name);
+                    for (Task t : found) {
+                        if (t != null && t.getId() != null && seenIds.add(t.getId())) allTasks.add(t);
+                    }
+                } catch (Exception ex) {
+                    log.warn("planAllStagedGoals: keyword resolution failed for '{}': {}", name, ex.getMessage());
+                }
             }
+
+            // --- Relic goals → GoalType.RELIC ---
+            for (String id : goalStore.getRelicGoals()) {
+                String name = id;
+                int cost = 0;
+                if (taskRepo != null) {
+                    for (Relic r : taskRepo.getAllRelics()) {
+                        if (r != null && id.equals(r.getId())) { name = r.getName(); cost = r.getUnlockCost(); break; }
+                    }
+                }
+                goalNames.add(name);
+                GoalSpec spec = GoalSpec.builder()
+                        .type(GoalType.RELIC)
+                        .targetId(id)
+                        .targetName(name)
+                        .rawPhrase("unlock relic " + name)
+                        .unlockCost(cost)
+                        .build();
+                try {
+                    CompositeGoal cg = goalPlanner.resolveCompositeGoal(spec, ctx);
+                    for (Task t : cg.getTaskBatch()) {
+                        if (t != null && t.getId() != null && seenIds.add(t.getId())) allTasks.add(t);
+                    }
+                } catch (Exception ex) {
+                    log.warn("planAllStagedGoals: relic resolution failed for '{}': {}", id, ex.getMessage());
+                }
+            }
+
+            // --- Area goals → GoalType.AREA ---
+            for (String id : goalStore.getAreaGoals()) {
+                String name = id;
+                int cost = 0;
+                if (taskRepo != null) {
+                    for (Area a : taskRepo.getAllAreas()) {
+                        if (a != null && id.equals(a.getId())) { name = a.getName(); cost = a.getUnlockCost(); break; }
+                    }
+                }
+                goalNames.add(name);
+                GoalSpec spec = GoalSpec.builder()
+                        .type(GoalType.AREA)
+                        .targetId(id)
+                        .targetName(name)
+                        .rawPhrase("unlock " + name)
+                        .unlockCost(cost)
+                        .build();
+                try {
+                    CompositeGoal cg = goalPlanner.resolveCompositeGoal(spec, ctx);
+                    for (Task t : cg.getTaskBatch()) {
+                        if (t != null && t.getId() != null && seenIds.add(t.getId())) allTasks.add(t);
+                    }
+                } catch (Exception ex) {
+                    log.warn("planAllStagedGoals: area resolution failed for '{}': {}", id, ex.getMessage());
+                }
+            }
+
+            // --- Pact goals — no tasks to plan, just record the name ---
+            for (String id : goalStore.getPactGoals()) {
+                goalNames.add(id);
+            }
+
+            if (allTasks.isEmpty()) {
+                String msg = goalStore.getPactGoals().isEmpty()
+                        ? "No tasks found. Run the scraper and try again."
+                        : "Pact goals set — no tasks to plan.";
+                SwingUtilities.invokeLater(() -> panel.setStatus(msg));
+                log.info("planAllStagedGoals: no tasks resolved for {} staged goals", total);
+                return;
+            }
+
+            // Build DAG, topological sort, proximity optimise
+            java.util.Set<String> completed = new java.util.HashSet<>();
+            java.util.List<Task> dag = goalPlanner.buildDag(allTasks, completed);
+            java.util.List<Task> sorted;
+            try {
+                sorted = goalPlanner.topologicalSort(dag);
+            } catch (IllegalStateException cycle) {
+                log.warn("planAllStagedGoals: cycle in DAG, using insertion order: {}", cycle.getMessage());
+                sorted = dag;
+            }
+
+            net.runelite.api.coords.WorldPoint loc = ctx.getLocation();
+            java.util.List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
+            java.util.List<PlannedStep> steps = ChatService.buildSteps(optimized);
+            if (proximityOptimizer != null && !steps.isEmpty()) {
+                java.util.Set<String> unlockedAreas = ctx.getUnlockedAreas();
+                steps = proximityOptimizer.optimize(steps, ctx, unlockedAreas);
+            }
+
+            // Build a human-readable goal label
+            int showNames = Math.min(goalNames.size(), 3);
+            String goalLabel = String.join(", ", goalNames.subList(0, showNames));
+            if (goalNames.size() > showNames) goalLabel += " +" + (goalNames.size() - showNames) + " more";
+
+            log.info("planAllStagedGoals: resolved {} tasks for {} goals ({})",
+                    steps.size(), goalNames.size(), goalLabel);
+
+            final java.util.List<PlannedStep> finalSteps = steps;
+            final String finalLabel = goalLabel;
+            activatePlan(finalLabel, finalSteps, null);
+            SwingUtilities.invokeLater(panel::switchToGoalsTab);
+
         } catch (Exception ex) {
             log.error("planAllStagedGoals failed: {}", ex.getMessage(), ex);
             SwingUtilities.invokeLater(() -> panel.setStatus("Plan failed: " + ex.getMessage()));
@@ -595,46 +745,53 @@ public class LeaguesAiPlugin extends Plugin {
      */
     private void attachPlanCallback(ChatService svc) {
         if (svc == null) return;
-        svc.setOnPlanCreated((goal, steps, review) -> {
-            if (panel == null || steps == null || steps.isEmpty()) return;
-            final int total = steps.size();
-            final String safeGoal = goal == null ? "" : goal;
+        svc.setOnPlanCreated((goal, steps, review) -> activatePlan(goal, steps, review));
+    }
 
-            // Persist plan so it survives a RuneLite restart.
-            if (goalStore != null) {
-                List<String> taskIds = steps.stream()
-                        .filter(s -> s.getTask() != null && s.getTask().getId() != null)
-                        .map(s -> s.getTask().getId())
-                        .collect(Collectors.toList());
-                goalStore.saveCurrentPlan(safeGoal, taskIds);
-            }
+    /**
+     * Push a resolved plan into the UI and overlay controller.
+     * Called both from the ChatService plan callback and directly from
+     * {@link #planAllStagedGoals()} so both code paths share identical behaviour.
+     */
+    private void activatePlan(String goal, List<PlannedStep> steps, String review) {
+        if (panel == null || steps == null || steps.isEmpty()) return;
+        final int total = steps.size();
+        final String safeGoal = goal == null ? "" : goal;
 
-            // Goals panel: goal title, progress, review banner, accordion
-            panel.getGoalsPanel().setGoal(safeGoal);
-            panel.getGoalsPanel().setProgress(0, total);
-            panel.getGoalsPanel().setReviewBanner(review);
-            panel.getGoalsPanel().setSteps(steps);
+        // Persist plan so it survives a RuneLite restart.
+        if (goalStore != null) {
+            List<String> taskIds = steps.stream()
+                    .filter(s -> s.getTask() != null && s.getTask().getId() != null)
+                    .map(s -> s.getTask().getId())
+                    .collect(Collectors.toList());
+            goalStore.saveCurrentPlan(safeGoal, taskIds);
+        }
 
-            SwingUtilities.invokeLater(() -> {
-                panel.setStatus("Plan: " + (safeGoal.length() > 30 ? safeGoal.substring(0, 27) + "..." : safeGoal));
-                panel.setProgress(0, total);
-            });
+        // Goals panel: goal title, progress, review banner, accordion
+        panel.getGoalsPanel().setGoal(safeGoal);
+        panel.getGoalsPanel().setProgress(0, total);
+        panel.getGoalsPanel().setReviewBanner(review);
+        panel.getGoalsPanel().setSteps(steps);
 
-            // Overlay controller: activate the first step so arrows/highlights appear in-game
-            PlannedStep first = steps.get(0);
-            if (first != null && overlayController != null) {
-                SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first));
-                log.info("Plan callback: activating first step '{}' — location={}, npcIds={}, objIds={}",
-                        first.getInstruction(),
-                        first.getDestination(),
-                        first.getOverlayData() != null ? first.getOverlayData().getTargetNpcIds() : "none",
-                        first.getOverlayData() != null ? first.getOverlayData().getTargetObjectIds() : "none");
-            }
-
-            long withLocation = steps.stream().filter(s -> s.getDestination() != null).count();
-            log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
-                    total, withLocation, review != null);
+        SwingUtilities.invokeLater(() -> {
+            panel.setStatus("Plan: " + (safeGoal.length() > 30 ? safeGoal.substring(0, 27) + "..." : safeGoal));
+            panel.setProgress(0, total);
         });
+
+        // Overlay controller: activate the first step so arrows/highlights appear in-game
+        PlannedStep first = steps.get(0);
+        if (first != null && overlayController != null) {
+            SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first));
+            log.info("Plan callback: activating first step '{}' — location={}, npcIds={}, objIds={}",
+                    first.getInstruction(),
+                    first.getDestination(),
+                    first.getOverlayData() != null ? first.getOverlayData().getTargetNpcIds() : "none",
+                    first.getOverlayData() != null ? first.getOverlayData().getTargetObjectIds() : "none");
+        }
+
+        long withLocation = steps.stream().filter(s -> s.getDestination() != null).count();
+        log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
+                total, withLocation, review != null);
     }
 
     /**
@@ -838,7 +995,6 @@ public class LeaguesAiPlugin extends Plugin {
         }
         com.leaguesai.ui.HeartbeatTicker fresh = new com.leaguesai.ui.HeartbeatTicker(
                 panel.getChatPanel(),
-                panel.getGoalsPanel(),
                 new LocalHeartbeat(),
                 coachPulseService,
                 contextAssembler,
@@ -912,12 +1068,14 @@ public class LeaguesAiPlugin extends Plugin {
             currentApiKey = safeKey;
             llmExecutor.submit(() -> {
                 LlmClient old = openAiClient;
-                openAiClient = new OpenAiClient(safeKey, config.openaiModel());
+                String model = userPreferences != null ? userPreferences.getModel() : UserPreferences.DEFAULT_MODEL;
+                openAiClient = new OpenAiClient(safeKey, model);
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
                     chatService.setItemDependencyGraph(this.itemDependencyGraph);
                     chatService.setProximityOptimizer(proximityOptimizer);
                     chatService.setHistoryStore(chatHistoryStore);
+                    chatService.setUserPreferences(userPreferences);
                     attachPlanCallback(chatService);
                     coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
                     rebuildHeartbeatTicker();
@@ -937,6 +1095,55 @@ public class LeaguesAiPlugin extends Plugin {
             SwingUtilities.invokeLater(() ->
                 panel.getSettingsPanel().setDatabaseStatus("Reloading...", false));
             llmExecutor.submit(this::loadDatabaseAsync);
+        });
+
+        // Settings — model changed: persist + rebuild LLM client
+        panel.getSettingsPanel().setOnModelChanged(newModel -> {
+            if (newModel == null || newModel.isEmpty()) return;
+            llmExecutor.submit(() -> {
+                UserPreferences prefs = userPreferences;
+                if (prefs == null) prefs = new UserPreferences();
+                prefs.setModel(newModel);
+                prefs.save(PREFS_FILE);
+                userPreferences = prefs;
+
+                LlmClient old = openAiClient;
+                LlmClient newClient;
+                if (usingCodexOauth) {
+                    newClient = new CodexOauthClient(newModel);
+                } else {
+                    newClient = new OpenAiClient(currentApiKey, newModel);
+                }
+                openAiClient = newClient;
+                ChatService svc = chatService;
+                if (svc != null) svc.setUserPreferences(userPreferences);
+                // Rebuild ChatService with new client
+                if (taskRepo != null && vectorIndex != null) {
+                    ChatService newSvc = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    newSvc.setItemDependencyGraph(itemDependencyGraph);
+                    newSvc.setProximityOptimizer(proximityOptimizer);
+                    newSvc.setHistoryStore(chatHistoryStore);
+                    newSvc.setUserPreferences(userPreferences);
+                    attachPlanCallback(newSvc);
+                    chatService = newSvc;
+                }
+                if (old != null) old.close();
+                log.info("Model changed to: {}", newModel);
+            });
+        });
+
+        // Settings — personas changed: persist + update active ChatService
+        panel.getSettingsPanel().setOnPersonasChanged(personas -> {
+            llmExecutor.submit(() -> {
+                UserPreferences prefs = userPreferences;
+                if (prefs == null) prefs = new UserPreferences();
+                prefs.setSelectedPersonas(personas);
+                prefs.save(PREFS_FILE);
+                userPreferences = prefs;
+                ChatService svc = chatService;
+                if (svc != null) svc.setUserPreferences(userPreferences);
+                log.info("Personas updated: {}", personas);
+            });
         });
 
         // Wire BuildsPanel callbacks
@@ -1006,7 +1213,28 @@ public class LeaguesAiPlugin extends Plugin {
         // Wire goal queue bar actions
         panel.getGoalsPanel().setOnPlanGoals(() ->
                 llmExecutor.submit(this::planAllStagedGoals));
+        panel.getGoalsPanel().setOnClearGoals(() -> {
+            if (goalStore != null) {
+                goalStore.clearAllGoals();
+                refreshGoalQueueBar();
+            }
+        });
         panel.getGoalsPanel().setOnSaveGoalsAsBuild(this::saveGoalsAsBuild);
+
+        // Clear active plan + goal (separate from clearing staged goals queue)
+        panel.getGoalsPanel().setOnClearPlan(() -> {
+            if (contextAssembler != null) {
+                contextAssembler.setCurrentGoal(null);
+                contextAssembler.setCurrentPlan(java.util.Collections.emptyList());
+            }
+            SwingUtilities.invokeLater(() -> {
+                panel.getGoalsPanel().setGoal(null);
+                panel.getGoalsPanel().setSteps(java.util.Collections.emptyList());
+                panel.getGoalsPanel().setReviewBanner(null);
+                panel.getGoalsPanel().setProgress(0, 0);
+            });
+            overlayController.clearAll();
+        });
     }
 
     @Subscribe

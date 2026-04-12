@@ -33,7 +33,6 @@ public class ChatPanel extends JPanel {
     private final JButton clearButton;
     private final JButton goalsLinkButton;
     private final JLabel loadingLabel;
-    private final JLabel heartbeatLabel;
     private final List<String> messageHistory = new ArrayList<>();
 
     private JPanel emptyStatePanel;
@@ -122,12 +121,6 @@ public class ChatPanel extends JPanel {
         loadingLabel.setVisible(false);
         loadingLabel.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
 
-        // Heartbeat label — driven by HeartbeatTicker every 60s
-        heartbeatLabel = new JLabel(" ");
-        heartbeatLabel.setForeground(new Color(150, 200, 150));
-        heartbeatLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
-        heartbeatLabel.setBorder(BorderFactory.createEmptyBorder(2, 2, 4, 2));
-
         // Input panel
         JPanel inputPanel = new JPanel(new BorderLayout(4, 0));
         inputPanel.setBackground(BACKGROUND_COLOR);
@@ -151,16 +144,7 @@ public class ChatPanel extends JPanel {
         sendButton.setBorderPainted(false);
         sendButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        // North of the input row stacks heartbeat + loading indicator
-        JPanel northStack = new JPanel();
-        northStack.setLayout(new BoxLayout(northStack, BoxLayout.Y_AXIS));
-        northStack.setBackground(BACKGROUND_COLOR);
-        heartbeatLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        loadingLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        northStack.add(heartbeatLabel);
-        northStack.add(loadingLabel);
-
-        inputPanel.add(northStack, BorderLayout.NORTH);
+        inputPanel.add(loadingLabel, BorderLayout.NORTH);
         inputPanel.add(inputField, BorderLayout.CENTER);
         inputPanel.add(sendButton, BorderLayout.EAST);
 
@@ -324,28 +308,6 @@ public class ChatPanel extends JPanel {
                 JScrollBar bar = scrollPane.getVerticalScrollBar();
                 bar.setValue(bar.getMaximum());
             });
-        });
-    }
-
-    /**
-     * Heartbeat label setter — driven by HeartbeatTicker. EDT-safe.
-     *
-     * <p>The side panel is only ~210px wide so plain text like
-     * "Looking good, take a quick break?" gets clipped on the right.
-     * Wrap in HTML with an explicit width hint so JLabel word-wraps and
-     * its preferredSize reflows to fit multi-line content.
-     */
-    public void setHeartbeatText(String text) {
-        SwingUtilities.invokeLater(() -> {
-            if (text == null || text.isEmpty()) {
-                heartbeatLabel.setText(" ");
-            } else {
-                String safe = text.replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;");
-                heartbeatLabel.setText("<html><div style='width:195px'>" + safe + "</div></html>");
-            }
-            heartbeatLabel.revalidate();
         });
     }
 

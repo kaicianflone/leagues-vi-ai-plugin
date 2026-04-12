@@ -1,9 +1,13 @@
 package com.leaguesai.ui;
 
+import com.leaguesai.data.UserPreferences;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 import javax.swing.JOptionPane;
 
@@ -17,6 +21,22 @@ public class SettingsPanel extends JPanel {
     private static final Color WARNING_COLOR = new Color(255, 180, 50);
     private static final Color ERROR_TEXT_COLOR = new Color(220, 60, 60);
 
+    private static final String[] MODEL_OPTIONS = {
+            "gpt-5.4", "gpt-5", "gpt-4o", "gpt-4o-mini"
+    };
+
+    private static final String[][] PERSONA_DEFS = {
+            {"points_chaser",  "Points Chaser — pts/hr, task batching, parallel completion"},
+            {"build_architect","Build Architect — relic + pact synergy, gear milestones"},
+            {"explorer",       "Explorer — Varlamore strategy, area unlock order"},
+            {"sprinter",       "Sprinter — pace tracking, time-limited mindset"},
+            {"theorist",       "Theorist — exact math, DPS calcs, synergy numbers"},
+            {"settled",        "Settled — methodical, prereq chains, no shortcuts"},
+            {"sirpugger",      "SirPugger — leagues meta, echo boss priorities"},
+            {"pragmatist",     "Pragmatist — anchored to current levels and unlocks"},
+            {"skill_spec",     "Skill Spec — XP/hr, skilling routes, level milestones"},
+    };
+
     private final JLabel authModeLabel;
     private final JButton signInButton;
     private final JPasswordField apiKeyField;
@@ -27,11 +47,15 @@ public class SettingsPanel extends JPanel {
     private final JButton refreshDataButton;
     private final JButton rescrapeButton;
     private final JLabel dbStatusLabel;
+    private final JComboBox<String> modelDropdown;
+    private final JCheckBox[] personaCheckboxes;
 
     private Consumer<String> onGoalSet;
     private Consumer<String> onApiKeyChanged;
     private Runnable onRefreshData;
     private Runnable onSignIn;
+    private Consumer<String> onModelChanged;
+    private Consumer<List<String>> onPersonasChanged;
 
     public SettingsPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -57,6 +81,81 @@ public class SettingsPanel extends JPanel {
             }
         });
         add(signInButton);
+        add(Box.createVerticalStrut(10));
+
+        // Model selector
+        JLabel modelLabel = createLabel("Model:");
+        modelLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        add(modelLabel);
+        add(Box.createVerticalStrut(4));
+
+        modelDropdown = new JComboBox<>(MODEL_OPTIONS);
+        modelDropdown.setBackground(INPUT_BACKGROUND);
+        modelDropdown.setForeground(TEXT_COLOR);
+        modelDropdown.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+        modelDropdown.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        modelDropdown.setAlignmentX(Component.LEFT_ALIGNMENT);
+        modelDropdown.addActionListener(e -> {
+            if (onModelChanged != null) {
+                onModelChanged.accept((String) modelDropdown.getSelectedItem());
+            }
+        });
+        add(modelDropdown);
+        add(Box.createVerticalStrut(12));
+
+        // Persona selection
+        JLabel personaLabel = createLabel("Coaching Personas:");
+        personaLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        add(personaLabel);
+        add(Box.createVerticalStrut(4));
+
+        // Select all / deselect all row
+        JPanel personaButtonRow = new JPanel(new GridLayout(1, 2, 4, 0));
+        personaButtonRow.setBackground(BACKGROUND_COLOR);
+        personaButtonRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+        personaButtonRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JButton selectAllBtn = new JButton("All");
+        selectAllBtn.setBackground(new Color(50, 70, 50));
+        selectAllBtn.setForeground(Color.WHITE);
+        selectAllBtn.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        selectAllBtn.setFocusPainted(false);
+        selectAllBtn.setBorderPainted(false);
+
+        JButton deselectAllBtn = new JButton("None");
+        deselectAllBtn.setBackground(new Color(70, 50, 50));
+        deselectAllBtn.setForeground(Color.WHITE);
+        deselectAllBtn.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        deselectAllBtn.setFocusPainted(false);
+        deselectAllBtn.setBorderPainted(false);
+
+        personaButtonRow.add(selectAllBtn);
+        personaButtonRow.add(deselectAllBtn);
+        add(personaButtonRow);
+        add(Box.createVerticalStrut(4));
+
+        personaCheckboxes = new JCheckBox[PERSONA_DEFS.length];
+        for (int i = 0; i < PERSONA_DEFS.length; i++) {
+            JCheckBox cb = new JCheckBox("<html><span style='font-size:10px'>"
+                    + PERSONA_DEFS[i][1] + "</span></html>", true);
+            cb.setBackground(BACKGROUND_COLOR);
+            cb.setForeground(TEXT_COLOR);
+            cb.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+            cb.setAlignmentX(Component.LEFT_ALIGNMENT);
+            cb.setFocusPainted(false);
+            cb.addActionListener(e -> firePersonasChanged());
+            personaCheckboxes[i] = cb;
+            add(cb);
+        }
+
+        selectAllBtn.addActionListener(e -> {
+            for (JCheckBox cb : personaCheckboxes) cb.setSelected(true);
+            firePersonasChanged();
+        });
+        deselectAllBtn.addActionListener(e -> {
+            for (JCheckBox cb : personaCheckboxes) cb.setSelected(false);
+            firePersonasChanged();
+        });
         add(Box.createVerticalStrut(10));
 
         // API Key section
@@ -267,5 +366,50 @@ public class SettingsPanel extends JPanel {
     public void setDatabaseStatus(String status, boolean isError) {
         dbStatusLabel.setText("Database: " + status);
         dbStatusLabel.setForeground(isError ? ERROR_TEXT_COLOR : LABEL_COLOR);
+    }
+
+    // -------------------------------------------------------------------------
+    // Model + Persona accessors
+    // -------------------------------------------------------------------------
+
+    public String getSelectedModel() {
+        Object sel = modelDropdown.getSelectedItem();
+        return sel != null ? sel.toString() : UserPreferences.DEFAULT_MODEL;
+    }
+
+    public void setSelectedModel(String model) {
+        SwingUtilities.invokeLater(() -> modelDropdown.setSelectedItem(model));
+    }
+
+    public List<String> getSelectedPersonas() {
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < personaCheckboxes.length; i++) {
+            if (personaCheckboxes[i].isSelected()) {
+                result.add(PERSONA_DEFS[i][0]);
+            }
+        }
+        return result;
+    }
+
+    public void setSelectedPersonas(List<String> personas) {
+        SwingUtilities.invokeLater(() -> {
+            for (int i = 0; i < personaCheckboxes.length; i++) {
+                personaCheckboxes[i].setSelected(personas.contains(PERSONA_DEFS[i][0]));
+            }
+        });
+    }
+
+    public void setOnModelChanged(Consumer<String> callback) {
+        this.onModelChanged = callback;
+    }
+
+    public void setOnPersonasChanged(Consumer<List<String>> callback) {
+        this.onPersonasChanged = callback;
+    }
+
+    private void firePersonasChanged() {
+        if (onPersonasChanged != null) {
+            onPersonasChanged.accept(getSelectedPersonas());
+        }
     }
 }

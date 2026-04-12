@@ -97,9 +97,14 @@ public class GoalAccordion extends JPanel {
         wrapper.setBackground(ROW_BG);
         wrapper.setBorder(BorderFactory.createLineBorder(BORDER));
         wrapper.setAlignmentX(Component.LEFT_ALIGNMENT);
-        wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        // Cap width at a sane value so BoxLayout Y_AXIS never makes the
+        // wrapper prefer more than the panel content width (~220px).
+        wrapper.setMaximumSize(new Dimension(Short.MAX_VALUE, Integer.MAX_VALUE));
 
-        // Header
+        // Header: chevron WEST | title CENTER | meta EAST
+        // Chevron in WEST keeps a small fixed preferred width so BorderLayout
+        // allocates the rest to CENTER (title). Title therefore never pushes
+        // the row wider than its container.
         JPanel header = new JPanel(new BorderLayout(4, 0));
         header.setBackground(ROW_BG);
         header.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
@@ -110,20 +115,17 @@ public class GoalAccordion extends JPanel {
         chevron.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 
         String instruction = step.getInstruction() != null ? step.getInstruction() : "(step)";
-        if (instruction.length() > 60) instruction = instruction.substring(0, 57) + "...";
+        if (instruction.length() > 50) instruction = instruction.substring(0, 47) + "...";
         JLabel title = new JLabel(index + ". " + instruction);
         title.setForeground(HEADER_FG);
         title.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+        // Prevent the title from reporting a huge preferred width that would
+        // overflow BorderLayout WEST. CENTER gets allocated whatever space
+        // remains after WEST (chevron) and EAST (meta).
+        title.setMinimumSize(new Dimension(0, title.getPreferredSize().height));
 
-        JPanel left = new JPanel();
-        left.setLayout(new BoxLayout(left, BoxLayout.X_AXIS));
-        left.setOpaque(false);
-        left.add(chevron);
-        left.add(javax.swing.Box.createHorizontalStrut(6));
-        left.add(title);
-
-        StringBuilder meta = new StringBuilder();
         Task t = step.getTask();
+        StringBuilder meta = new StringBuilder();
         if (t != null) {
             if (t.getDifficulty() != null) {
                 meta.append(t.getDifficulty().name().toLowerCase());
@@ -137,7 +139,8 @@ public class GoalAccordion extends JPanel {
         metaLabel.setForeground(META_FG);
         metaLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 
-        header.add(left, BorderLayout.WEST);
+        header.add(chevron, BorderLayout.WEST);
+        header.add(title, BorderLayout.CENTER);
         header.add(metaLabel, BorderLayout.EAST);
 
         // Child panel — built once, toggled visible.
