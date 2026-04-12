@@ -30,6 +30,7 @@ public class ChatPanel extends JPanel {
     private final JTextField inputField;
     private final JButton sendButton;
     private final JButton copyButton;
+    private final JButton clearButton;
     private final JButton goalsLinkButton;
     private final JLabel loadingLabel;
     private final JLabel heartbeatLabel;
@@ -39,6 +40,7 @@ public class ChatPanel extends JPanel {
 
     private Consumer<String> onSendMessage;
     private Runnable onOpenGoals;
+    private Runnable onClear;
 
     public ChatPanel() {
         setLayout(new BorderLayout(0, 4));
@@ -76,18 +78,33 @@ public class ChatPanel extends JPanel {
             if (onOpenGoals != null) onOpenGoals.run();
         });
 
-        copyButton = new JButton("Copy chat");
+        copyButton = new JButton("Copy");
         copyButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
         copyButton.setBackground(new Color(55, 55, 55));
         copyButton.setForeground(TEXT_COLOR);
         copyButton.setFocusPainted(false);
         copyButton.setBorderPainted(false);
         copyButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        copyButton.setMargin(new Insets(2, 8, 2, 8));
+        copyButton.setMargin(new Insets(2, 6, 2, 6));
         copyButton.addActionListener(e -> copyChatToClipboard());
 
+        clearButton = new JButton("Clear");
+        clearButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        clearButton.setBackground(new Color(55, 55, 55));
+        clearButton.setForeground(new Color(220, 100, 100));
+        clearButton.setFocusPainted(false);
+        clearButton.setBorderPainted(false);
+        clearButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        clearButton.setMargin(new Insets(2, 6, 2, 6));
+        clearButton.addActionListener(e -> confirmAndClearChat());
+
+        JPanel rightButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        rightButtons.setBackground(BACKGROUND_COLOR);
+        rightButtons.add(copyButton);
+        rightButtons.add(clearButton);
+
         toolbar.add(goalsLinkButton, BorderLayout.WEST);
-        toolbar.add(copyButton, BorderLayout.EAST);
+        toolbar.add(rightButtons, BorderLayout.EAST);
 
         JPanel center = new JPanel(new BorderLayout());
         center.setBackground(BACKGROUND_COLOR);
@@ -337,6 +354,28 @@ public class ChatPanel extends JPanel {
         this.onOpenGoals = callback;
     }
 
+    /**
+     * Set a callback invoked after the user confirms and clears chat. The plugin
+     * uses this to wipe the persisted chat history and the LLM's conversation
+     * memory, so the clear is fully synchronised across all layers.
+     */
+    public void setOnClear(Runnable callback) {
+        this.onClear = callback;
+    }
+
+    private void confirmAndClearChat() {
+        int result = JOptionPane.showConfirmDialog(
+                this,
+                "Clear all chat messages? This cannot be undone.",
+                "Clear chat",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        if (result == JOptionPane.YES_OPTION) {
+            clearChat();
+        }
+    }
+
     public void clearChat() {
         messageHistory.clear();
         SwingUtilities.invokeLater(() -> {
@@ -345,6 +384,7 @@ public class ChatPanel extends JPanel {
             messageList.revalidate();
             messageList.repaint();
         });
+        if (onClear != null) onClear.run();
     }
 
     private void copyChatToClipboard() {
@@ -364,7 +404,7 @@ public class ChatPanel extends JPanel {
     }
 
     private void flashCopyButton(String text) {
-        String original = "Copy chat";
+        String original = "Copy";
         copyButton.setText(text);
         Timer t = new Timer(1500, e -> copyButton.setText(original));
         t.setRepeats(false);

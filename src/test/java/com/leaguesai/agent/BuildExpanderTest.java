@@ -38,7 +38,7 @@ public class BuildExpanderTest {
         MockitoAnnotations.openMocks(this);
 
         // Real GoalPlanner backed by mock TaskRepository
-        realPlanner = new GoalPlanner(taskRepository);
+        realPlanner = new GoalPlanner(taskRepository, null);
         buildExpander = new BuildExpander(gearRepository, taskRepository, realPlanner);
 
         // task-tbz-100: no prerequisites (used as a prereq for task-tbz-123)

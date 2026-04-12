@@ -28,7 +28,7 @@ public class GoalPlannerTest {
     @Before
     public void setUp() {
         MockitoAnnotations.openMocks(this);
-        planner = new GoalPlanner(taskRepo);
+        planner = new GoalPlanner(taskRepo, null);
 
         // taskA: no prerequisites
         taskA = Task.builder()

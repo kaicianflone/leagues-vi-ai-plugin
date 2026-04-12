@@ -1,5 +1,6 @@
 package com.leaguesai.agent;
 
+import com.leaguesai.data.ChatHistoryStore;
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.VectorIndex;
 import com.leaguesai.data.model.Task;
@@ -28,8 +29,9 @@ public class ChatService {
     private final TaskRepository taskRepo;
     private final VectorIndex vectorIndex;
     private final GoalPlanner goalPlanner;
-    private final ItemSourceResolver itemSourceResolver;
+    private volatile ItemSourceResolver itemSourceResolver;
     private final PersonaReviewer personaReviewer;
+    private volatile ItemDependencyGraph itemDependencyGraph;
 
     // Optional callback fired after a planner run succeeds. The plugin sets
     // this to push the plan to the UI (goals panel + overlays). The third
@@ -39,6 +41,10 @@ public class ChatService {
     // Optional post-PlannedStep proximity optimizer (relic-aware nearest-neighbour).
     // Set via setter so the existing 5-arg constructor and tests remain unchanged.
     private volatile ProximityOptimizer proximityOptimizer;
+
+    // Optional history store for session persistence. Null = no persistence
+    // (tests and pre-load state). Set by LeaguesAiPlugin after DB loads.
+    private volatile ChatHistoryStore historyStore;
 
     /** Functional callback so we can pass three args without nesting BiConsumers. */
     @FunctionalInterface
@@ -124,7 +130,8 @@ public class ChatService {
         // Network call OUTSIDE the lock — may take seconds
         String response = openAiClient.chatCompletion(systemPrompt, snapshot);
 
-        // Re-acquire lock to record assistant reply
+        // Re-acquire lock to record assistant reply, then snapshot for persistence
+        List<ChatHistoryStore.Entry> toSave = null;
         synchronized (conversationHistory) {
             conversationHistory.add(new OpenAiClient.Message("assistant", response));
 
@@ -132,6 +139,17 @@ public class ChatService {
             while (conversationHistory.size() > MAX_HISTORY) {
                 conversationHistory.remove(0);
             }
+
+            if (historyStore != null) {
+                toSave = new ArrayList<>(conversationHistory.size());
+                for (OpenAiClient.Message m : conversationHistory) {
+                    toSave.add(new ChatHistoryStore.Entry(m.getRole(), m.getContent()));
+                }
+            }
+        }
+        // Persist OUTSIDE the lock — I/O must not hold the conversation lock.
+        if (toSave != null) {
+            historyStore.save(toSave);
         }
 
         return response;
@@ -152,6 +170,37 @@ public class ChatService {
         this.proximityOptimizer = optimizer;
     }
 
+    /** Plugs in the history store for session persistence across restarts. */
+    public void setHistoryStore(ChatHistoryStore store) {
+        this.historyStore = store;
+    }
+
+    /** Plugs in the item dependency graph for item goal detection in GoalSpecParser,
+     *  and rebuilds the {@link ItemSourceResolver} to enable DB-first lookups. */
+    public void setItemDependencyGraph(ItemDependencyGraph graph) {
+        this.itemDependencyGraph = graph;
+        if (openAiClient != null) {
+            this.itemSourceResolver = new ItemSourceResolver(openAiClient, graph);
+        }
+    }
+
+    /**
+     * Pre-populate conversation history from a prior session (called on startup
+     * after the store is loaded). Does NOT persist back — the store already has
+     * this data.
+     */
+    public void loadHistory(List<ChatHistoryStore.Entry> entries) {
+        if (entries == null || entries.isEmpty()) return;
+        synchronized (conversationHistory) {
+            conversationHistory.clear();
+            for (ChatHistoryStore.Entry e : entries) {
+                if (e.role != null && e.content != null) {
+                    conversationHistory.add(new OpenAiClient.Message(e.role, e.content));
+                }
+            }
+        }
+    }
+
     /**
      * Atomically invalidates any in-flight plan resolution (increments the
      * generation counter). Called by {@code LeaguesAiPlugin.activateBuild}
@@ -163,12 +212,14 @@ public class ChatService {
     }
 
     /**
-     * Clear the conversation history.
+     * Clear the conversation history (in-memory and persisted store).
      */
     public void clearHistory() {
         synchronized (conversationHistory) {
             conversationHistory.clear();
         }
+        ChatHistoryStore store = historyStore;
+        if (store != null) store.clear();
     }
 
     /**
@@ -251,13 +302,14 @@ public class ChatService {
             // matching. Returns TASK_BATCH for phrases the parser doesn't
             // recognise so we fall through to the existing flat path below.
             PlayerContext ctxForParser = contextAssembler.assemble();
-            GoalSpec spec = GoalSpecParser.parse(userMessage, taskRepo);
+            GoalSpec spec = GoalSpecParser.parse(userMessage, taskRepo, itemDependencyGraph);
             List<Task> targets;
             CompositeGoal composite = null;
 
             if (spec.getType() == GoalType.RELIC
                     || spec.getType() == GoalType.AREA
-                    || spec.getType() == GoalType.PACT) {
+                    || spec.getType() == GoalType.PACT
+                    || spec.getType() == GoalType.ITEM) {
                 composite = goalPlanner.resolveCompositeGoal(spec, ctxForParser);
                 log.info("Composite goal resolved: type={} target={} reachable={} gap={} covered={} children={}",
                         spec.getType(), spec.getTargetName(), composite.isReachable(),
@@ -296,43 +348,7 @@ public class ChatService {
             WorldPoint loc = ctxForParser.getLocation();
             List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
 
-            // Convert tasks → PlannedSteps with OverlayData populated from whatever
-            // the scraper captured. Many tasks won't have a resolved location yet,
-            // so the overlay will only show for tasks with a known WorldPoint.
-            List<PlannedStep> steps = optimized.stream()
-                    .map(t -> {
-                        List<Integer> npcIds = new ArrayList<>();
-                        if (t.getTargetNpcs() != null) {
-                            t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
-                        }
-                        List<Integer> objIds = new ArrayList<>();
-                        if (t.getTargetObjects() != null) {
-                            t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
-                        }
-                        List<Integer> itemIds = new ArrayList<>();
-                        if (t.getTargetItems() != null) {
-                            t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
-                        }
-                        com.leaguesai.overlay.OverlayData overlayData =
-                                com.leaguesai.overlay.OverlayData.builder()
-                                        .targetTile(t.getLocation())
-                                        .targetNpcIds(npcIds)
-                                        .targetObjectIds(objIds)
-                                        .targetItemIds(itemIds)
-                                        .pathPoints(Collections.emptyList())
-                                        .widgetIds(Collections.emptyList())
-                                        .showArrow(t.getLocation() != null)
-                                        .showMinimap(t.getLocation() != null)
-                                        .showWorldMap(t.getLocation() != null)
-                                        .build();
-                        return PlannedStep.builder()
-                                .task(t)
-                                .destination(t.getLocation())
-                                .instruction(t.getName())
-                                .overlayData(overlayData)
-                                .build();
-                    })
-                    .collect(Collectors.toList());
+            List<PlannedStep> steps = buildSteps(optimized);
 
             // Relic-aware proximity reorder (post-PlannedStep pass; no-op when null).
             if (proximityOptimizer != null && !steps.isEmpty()) {
@@ -396,5 +412,45 @@ public class ChatService {
         } catch (Exception e) {
             log.warn("Planner failed for goal '{}': {}", userMessage, e.getMessage());
         }
+    }
+
+    /**
+     * Convert an ordered list of {@link Task}s into {@link PlannedStep}s with
+     * {@link com.leaguesai.overlay.OverlayData} populated from scraped task data.
+     * Steps with a null location still appear in the plan but have overlays
+     * disabled ({@code showArrow/showMinimap/showWorldMap = false}).
+     *
+     * <p>Static so {@code LeaguesAiPlugin.activateBuild} can share the same
+     * conversion logic without duplicating the stream.
+     */
+    public static List<PlannedStep> buildSteps(List<Task> tasks) {
+        return tasks.stream()
+                .map(t -> {
+                    List<Integer> npcIds = new ArrayList<>();
+                    if (t.getTargetNpcs() != null) t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
+                    List<Integer> objIds = new ArrayList<>();
+                    if (t.getTargetObjects() != null) t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
+                    List<Integer> itemIds = new ArrayList<>();
+                    if (t.getTargetItems() != null) t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
+                    com.leaguesai.overlay.OverlayData overlayData =
+                            com.leaguesai.overlay.OverlayData.builder()
+                                    .targetTile(t.getLocation())
+                                    .targetNpcIds(npcIds)
+                                    .targetObjectIds(objIds)
+                                    .targetItemIds(itemIds)
+                                    .pathPoints(Collections.emptyList())
+                                    .widgetIds(Collections.emptyList())
+                                    .showArrow(t.getLocation() != null)
+                                    .showMinimap(t.getLocation() != null)
+                                    .showWorldMap(t.getLocation() != null)
+                                    .build();
+                    return PlannedStep.builder()
+                            .task(t)
+                            .destination(t.getLocation())
+                            .instruction(t.getName())
+                            .overlayData(overlayData)
+                            .build();
+                })
+                .collect(Collectors.toList());
     }
 }

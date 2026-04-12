@@ -27,5 +27,12 @@ public enum GoalType {
     PACT,
     TASK_BATCH,
     FREEFORM,
-    BUILD   // New: gear build activation — multi-terminal DAG, no gap-closing
+    BUILD,  // New: gear build activation — multi-terminal DAG, no gap-closing
+
+    /**
+     * An item goal — get a specific item. Resolves via {@link ItemDependencyGraph}
+     * to a prerequisite chain of crafting steps and Leagues tasks. Falls back to
+     * LLM source lookup for items not in the dependency graph.
+     */
+    ITEM
 }

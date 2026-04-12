@@ -19,6 +19,9 @@ import java.util.Set;
  * <p>One call per plan, not per item: dedupe across all steps first, then
  * ask the model in a single batch. Failures degrade gracefully — the plan
  * still loads, just without the source text.
+ *
+ * <p>Two-phase lookup: items found in the local {@link ItemDependencyGraph}
+ * are resolved without an LLM call. Only the remainder is sent to the LLM.
  */
 @Slf4j
 public class ItemSourceResolver {
@@ -27,9 +30,15 @@ public class ItemSourceResolver {
     static final int MAX_SOURCE_LEN = 240;
 
     private final LlmClient llmClient;
+    private final ItemDependencyGraph itemDependencyGraph;
 
     public ItemSourceResolver(LlmClient llmClient) {
+        this(llmClient, null);
+    }
+
+    public ItemSourceResolver(LlmClient llmClient, ItemDependencyGraph itemDependencyGraph) {
         this.llmClient = llmClient;
+        this.itemDependencyGraph = itemDependencyGraph;
     }
 
     /**
@@ -50,20 +59,47 @@ public class ItemSourceResolver {
             return steps;
         }
 
-        Map<String, String> sources;
-        try {
-            String prompt = PromptBuilder.buildItemSourcePrompt(uniqueItems);
-            String reply = llmClient.chatCompletion(
-                    "You are a precise OSRS Leagues VI ironman acquisition guide.",
-                    Collections.singletonList(new OpenAiClient.Message("user", prompt))
-            );
-            // Pass the requested-item set so we drop any keys the LLM made up.
-            sources = parseReply(reply, uniqueItems);
-            log.info("ItemSourceResolver: resolved {} of {} items", sources.size(), uniqueItems.size());
-        } catch (Exception e) {
-            log.warn("ItemSourceResolver: LLM call failed, plan will load without item sources: {}", e.getMessage());
-            sources = Collections.emptyMap();
+        // Phase 1: resolve items locally from the ItemDependencyGraph (no LLM cost).
+        Map<String, String> dbSources = new LinkedHashMap<>();
+        if (itemDependencyGraph != null && !itemDependencyGraph.isEmpty()) {
+            for (String itemName : uniqueItems) {
+                com.leaguesai.data.model.ItemDependency dep = itemDependencyGraph.findItemByName(itemName);
+                if (dep != null) {
+                    String src = buildSourceLine(dep);
+                    if (src != null) dbSources.put(itemName, src);
+                }
+            }
+            if (!dbSources.isEmpty()) {
+                log.info("ItemSourceResolver: resolved {}/{} items from local DB",
+                        dbSources.size(), uniqueItems.size());
+            }
         }
+
+        // Phase 2: for any items not covered by the DB, ask the LLM.
+        Set<String> llmItems = new LinkedHashSet<>(uniqueItems);
+        llmItems.removeAll(dbSources.keySet());
+
+        Map<String, String> llmSources = Collections.emptyMap();
+        if (!llmItems.isEmpty()) {
+            try {
+                String prompt = PromptBuilder.buildItemSourcePrompt(llmItems);
+                String reply = llmClient.chatCompletion(
+                        "You are a precise OSRS Leagues VI ironman acquisition guide.",
+                        Collections.singletonList(new OpenAiClient.Message("user", prompt))
+                );
+                // Pass the requested-item set so we drop any keys the LLM made up.
+                llmSources = parseReply(reply, llmItems);
+                log.info("ItemSourceResolver: LLM resolved {} of {} remaining items",
+                        llmSources.size(), llmItems.size());
+            } catch (Exception e) {
+                log.warn("ItemSourceResolver: LLM call failed, plan will load without item sources: {}", e.getMessage());
+            }
+        }
+
+        // Merge: DB results first, then LLM results for any gaps.
+        Map<String, String> sources = new LinkedHashMap<>(dbSources);
+        sources.putAll(llmSources);
+        log.info("ItemSourceResolver: resolved {} of {} items total", sources.size(), uniqueItems.size());
 
         return attach(steps, sources);
     }
@@ -143,6 +179,27 @@ public class ItemSourceResolver {
     /** Backward-compat overload used by tests that don't care about whitelisting. */
     static Map<String, String> parseReply(String reply) {
         return parseReply(reply, null);
+    }
+
+    /**
+     * Builds a concise human-readable source line from a local {@link com.leaguesai.data.model.ItemDependency}.
+     * Returns {@code null} if {@code dep} is null or produces an empty result.
+     */
+    static String buildSourceLine(com.leaguesai.data.model.ItemDependency dep) {
+        if (dep == null) return null;
+        StringBuilder sb = new StringBuilder();
+        String methodName = dep.getObtainMethod().name();
+        sb.append(methodName.charAt(0))
+          .append(methodName.substring(1).toLowerCase());
+        if (dep.getSkillRequired() != null && !dep.getSkillRequired().isEmpty()) {
+            sb.append(" (").append(dep.getSkillRequired())
+              .append(" lv ").append(dep.getSkillLevel()).append(")");
+        }
+        if (dep.getSourceName() != null && !dep.getSourceName().isEmpty()) {
+            sb.append(" from ").append(dep.getSourceName());
+        }
+        String result = sb.toString().trim();
+        return result.isEmpty() ? null : result;
     }
 
     /**

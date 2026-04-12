@@ -90,6 +90,8 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile BuildStore buildStore;
     private volatile BuildExpander buildExpander;
     private volatile ProximityOptimizer proximityOptimizer;
+    private volatile ChatHistoryStore chatHistoryStore;
+    private volatile ItemDependencyGraph itemDependencyGraph;
 
     /**
      * Set to true at the very top of {@link #shutDown()}. Any in-flight
@@ -184,7 +186,10 @@ public class LeaguesAiPlugin extends Plugin {
                 ".runelite/leagues-ai/data/goals.json");
             goalStore = new GoalStore(goalsFile);
             vectorIndex = new VectorIndex(embeddings);
-            goalPlanner = new GoalPlanner(taskRepo);
+            ItemDependencyGraph itemDependencyGraph = new ItemDependencyGraph(dbFile);
+            itemDependencyGraph.loadFromDb();
+            this.itemDependencyGraph = itemDependencyGraph;
+            goalPlanner = new GoalPlanner(taskRepo, itemDependencyGraph);
 
             // Gear repository and build system
             File buildsFile = new File(System.getProperty("user.home"),
@@ -221,7 +226,12 @@ public class LeaguesAiPlugin extends Plugin {
             usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
             chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+            chatService.setItemDependencyGraph(itemDependencyGraph);
             chatService.setProximityOptimizer(proximityOptimizer);
+            File chatHistoryFile = new File(System.getProperty("user.home"),
+                ".runelite/leagues-ai/data/chat-history.json");
+            chatHistoryStore = new ChatHistoryStore(chatHistoryFile);
+            chatService.setHistoryStore(chatHistoryStore);
             attachPlanCallback(chatService);
             coachPulseService = new CoachPulseService(openAiClient, contextAssembler);
             // (Re)build the heartbeat ticker so it points at the new client.
@@ -257,6 +267,11 @@ public class LeaguesAiPlugin extends Plugin {
                 // Restore any goals queued in a prior session
                 refreshGoalQueueBar();
             });
+
+            // Restore previous session (chat history + active plan) now that all
+            // services are live. Must run before the UI update so the panel is
+            // populated by the time it becomes visible.
+            restoreSavedSession();
 
             SwingUtilities.invokeLater(() -> {
                 if (tasks.isEmpty()) {
@@ -316,6 +331,7 @@ public class LeaguesAiPlugin extends Plugin {
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
                         chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                        chatService.setItemDependencyGraph(this.itemDependencyGraph);
                         chatService.setProximityOptimizer(proximityOptimizer);
                         attachPlanCallback(chatService);
                         coachPulseService = new CoachPulseService(newClient, contextAssembler);
@@ -579,6 +595,15 @@ public class LeaguesAiPlugin extends Plugin {
             final int total = steps.size();
             final String safeGoal = goal == null ? "" : goal;
 
+            // Persist plan so it survives a RuneLite restart.
+            if (goalStore != null) {
+                List<String> taskIds = steps.stream()
+                        .filter(s -> s.getTask() != null && s.getTask().getId() != null)
+                        .map(s -> s.getTask().getId())
+                        .collect(Collectors.toList());
+                goalStore.saveCurrentPlan(safeGoal, taskIds);
+            }
+
             // Goals panel: goal title, progress, review banner, accordion
             panel.getGoalsPanel().setGoal(safeGoal);
             panel.getGoalsPanel().setProgress(0, total);
@@ -605,6 +630,76 @@ public class LeaguesAiPlugin extends Plugin {
             log.info("Plan callback: pushed {} steps to GoalsPanel and overlays ({} have a resolved location, review={})",
                     total, withLocation, review != null);
         });
+    }
+
+    /**
+     * Restore the last active plan and chat history from disk after the DB and
+     * all services are fully loaded. Called at the end of {@link #loadDatabaseAsync}.
+     *
+     * <p>Chat history: pre-populates {@code ChatService}'s in-memory list and
+     * replays messages into the ChatPanel so the visual history is visible.
+     *
+     * <p>Plan: resolves persisted task IDs back to {@link Task} objects, builds
+     * {@link PlannedStep}s, and pushes them to the GoalsPanel + OverlayController
+     * exactly as if the plan had just been created.
+     */
+    private void restoreSavedSession() {
+        // Restore chat history
+        if (chatHistoryStore != null && chatService != null) {
+            java.util.List<ChatHistoryStore.Entry> history = chatHistoryStore.load();
+            if (!history.isEmpty()) {
+                chatService.loadHistory(history);
+                SwingUtilities.invokeLater(() -> {
+                    if (panel == null) return;
+                    for (ChatHistoryStore.Entry e : history) {
+                        String sender = "user".equals(e.role) ? "You" : "AI";
+                        panel.getChatPanel().appendMessage(sender, e.content);
+                    }
+                });
+                log.info("Restored {} chat history entries", history.size());
+            }
+        }
+
+        // Restore active plan
+        if (goalStore == null || taskRepo == null) return;
+        String goalText = goalStore.getCurrentGoalText();
+        java.util.List<String> taskIds = goalStore.getCurrentPlanTaskIds();
+        if (goalText == null || taskIds == null || taskIds.isEmpty()) return;
+
+        java.util.List<Task> tasks = taskIds.stream()
+                .map(taskRepo::getById)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+
+        if (tasks.isEmpty()) {
+            // Stale IDs (e.g. DB was regenerated with new IDs) — clear to avoid
+            // a phantom plan showing on every restart.
+            goalStore.clearCurrentPlan();
+            log.info("Restored plan task IDs were all stale — cleared saved plan");
+            return;
+        }
+
+        java.util.List<PlannedStep> steps = ChatService.buildSteps(tasks);
+        if (contextAssembler != null) {
+            contextAssembler.setCurrentGoal(goalText);
+            contextAssembler.setCurrentPlan(steps);
+        }
+
+        final java.util.List<PlannedStep> finalSteps = steps;
+        final String finalGoal = goalText;
+        SwingUtilities.invokeLater(() -> {
+            if (panel != null) {
+                panel.getGoalsPanel().setGoal(finalGoal);
+                panel.getGoalsPanel().setProgress(0, finalSteps.size());
+                panel.getGoalsPanel().setSteps(finalSteps);
+                panel.switchToGoalsTab();
+            }
+            PlannedStep first = finalSteps.isEmpty() ? null : finalSteps.get(0);
+            if (first != null && overlayController != null) {
+                overlayController.setActiveStep(first);
+            }
+        });
+        log.info("Restored session plan: '{}' with {} steps", finalGoal, steps.size());
     }
 
     /**
@@ -648,34 +743,7 @@ public class LeaguesAiPlugin extends Plugin {
             List<Task> optimized = PlannerOptimizer.optimizeOrder(
                     tasks != null ? tasks : Collections.emptyList(), loc);
 
-            List<PlannedStep> steps = optimized.stream()
-                    .map(t -> {
-                        List<Integer> npcIds = new ArrayList<>();
-                        if (t.getTargetNpcs() != null) t.getTargetNpcs().forEach(n -> npcIds.add(n.getId()));
-                        List<Integer> objIds = new ArrayList<>();
-                        if (t.getTargetObjects() != null) t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
-                        List<Integer> itemIds = new ArrayList<>();
-                        if (t.getTargetItems() != null) t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
-                        com.leaguesai.overlay.OverlayData overlayData =
-                                com.leaguesai.overlay.OverlayData.builder()
-                                        .targetTile(t.getLocation())
-                                        .targetNpcIds(npcIds)
-                                        .targetObjectIds(objIds)
-                                        .targetItemIds(itemIds)
-                                        .pathPoints(Collections.emptyList())
-                                        .widgetIds(Collections.emptyList())
-                                        .showArrow(t.getLocation() != null)
-                                        .showMinimap(t.getLocation() != null)
-                                        .showWorldMap(t.getLocation() != null)
-                                        .build();
-                        return PlannedStep.builder()
-                                .task(t)
-                                .destination(t.getLocation())
-                                .instruction(t.getName())
-                                .overlayData(overlayData)
-                                .build();
-                    })
-                    .collect(Collectors.toList());
+            List<PlannedStep> steps = ChatService.buildSteps(optimized);
 
             // Step 3b: Relic-aware proximity reorder (post-PlannedStep pass)
             if (proximityOptimizer != null && !steps.isEmpty()) {
@@ -685,6 +753,13 @@ public class LeaguesAiPlugin extends Plugin {
             // Step 4: Now persist (after successful expansion)
             if (goalStore != null) {
                 goalStore.unionBuildPicks(build);
+                if (!steps.isEmpty()) {
+                    List<String> taskIds = steps.stream()
+                            .filter(s -> s.getTask() != null && s.getTask().getId() != null)
+                            .map(s -> s.getTask().getId())
+                            .collect(Collectors.toList());
+                    goalStore.saveCurrentPlan(build.getName(), taskIds);
+                }
             }
 
             if (!steps.isEmpty()) {
@@ -801,6 +876,12 @@ public class LeaguesAiPlugin extends Plugin {
             });
         });
 
+        // Clear chat — wipes LLM memory and persisted history
+        panel.getChatPanel().setOnClear(() -> {
+            ChatService svc = chatService;
+            if (svc != null) svc.clearHistory();
+        });
+
         // Cross-panel navigation links
         panel.getChatPanel().setOnOpenGoals(() -> panel.switchToGoalsTab());
         panel.getGoalsPanel().setOnOpenChat(() -> panel.switchToChatTab());
@@ -832,6 +913,7 @@ public class LeaguesAiPlugin extends Plugin {
                 openAiClient = new OpenAiClient(safeKey, config.openaiModel());
                 if (taskRepo != null && vectorIndex != null) {
                     chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    chatService.setItemDependencyGraph(this.itemDependencyGraph);
                     chatService.setProximityOptimizer(proximityOptimizer);
                     attachPlanCallback(chatService);
                     coachPulseService = new CoachPulseService(openAiClient, contextAssembler);

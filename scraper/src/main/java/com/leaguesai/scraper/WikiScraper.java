@@ -161,7 +161,18 @@ public class WikiScraper {
             }
         }
 
-        System.out.println("Task scrape complete. Item targets extracted (id=0). Run 'scrape-items' task to resolve wiki IDs and full stats.");
+        System.out.println("\nTask scraping done. Total tasks: " + totalTasks);
+
+        // Scrape item dependencies (crafting/smithing/fletching/herblore/cooking recipes)
+        System.out.println("\nScraping item dependencies from Skill calc modules...");
+        try {
+            ItemDependencyScraper itemScraper = new ItemDependencyScraper(dbFile);
+            int rows = itemScraper.scrape();
+            System.out.println("Item dependencies written: " + rows);
+        } catch (Exception e) {
+            System.err.println("Item dependency scrape failed: " + e.getMessage());
+            totalErrors++;
+        }
 
         writer.close();
 

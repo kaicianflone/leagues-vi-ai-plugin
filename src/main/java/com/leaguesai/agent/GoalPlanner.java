@@ -27,10 +27,12 @@ public class GoalPlanner {
     private static final int UNKNOWN_COST_TASK_CAP = 10;
 
     private final TaskRepository taskRepo;
+    private final ItemDependencyGraph itemDependencyGraph;
 
     @Inject
-    public GoalPlanner(TaskRepository taskRepo) {
+    public GoalPlanner(TaskRepository taskRepo, ItemDependencyGraph itemDependencyGraph) {
         this.taskRepo = taskRepo;
+        this.itemDependencyGraph = itemDependencyGraph;
     }
 
     /**
@@ -147,6 +149,11 @@ public class GoalPlanner {
      */
     public CompositeGoal resolveCompositeGoal(GoalSpec spec, PlayerContext ctx) {
         Objects.requireNonNull(spec, "GoalSpec must not be null");
+
+        // ITEM goals: dependency graph expansion, no point gap.
+        if (spec.getType() == GoalType.ITEM) {
+            return resolveItemGoal(spec, ctx);
+        }
 
         // BUILD goals: multi-terminal DAG, no gap-closing.
         // Each terminal task ID is a gear-reward task. Build the prereq DAG
@@ -294,6 +301,91 @@ public class GoalPlanner {
                 .coveredBy(covered)
                 .reachable(reachable)
                 .build();
+    }
+
+    /**
+     * Resolve an {@link GoalType#ITEM} goal by expanding the item dependency
+     * graph and matching each node to any corresponding Leagues task.
+     *
+     * <p>Returns a {@link CompositeGoal} with a taskBatch of matched tasks,
+     * ordered by prerequisite chain (deepest prereq first). If the graph has
+     * no data for this item, returns an empty batch and lets the LLM fall back
+     * to its own knowledge.
+     */
+    private CompositeGoal resolveItemGoal(GoalSpec spec, PlayerContext ctx) {
+        String targetId = spec.getTargetId();
+        if (targetId == null || itemDependencyGraph == null || itemDependencyGraph.isEmpty()) {
+            return CompositeGoal.builder()
+                    .root(spec)
+                    .pointsGap(0)
+                    .coveredBy(0)
+                    .reachable(true)
+                    .build();
+        }
+
+        List<com.leaguesai.data.model.ItemDependency> deps =
+                itemDependencyGraph.expand(targetId);
+
+        if (deps.isEmpty()) {
+            log.info("ITEM goal '{}': no dependency data, LLM fallback will fire",
+                    spec.getTargetName());
+            return CompositeGoal.builder()
+                    .root(spec)
+                    .pointsGap(0)
+                    .coveredBy(0)
+                    .reachable(true)
+                    .build();
+        }
+
+        // For each dependency node, see if there's a matching Leagues task.
+        Set<String> completed = ctx != null && ctx.getCompletedTasks() != null
+                ? ctx.getCompletedTasks() : Collections.emptySet();
+        List<Task> matched = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (com.leaguesai.data.model.ItemDependency dep : deps) {
+            List<Task> tasks = findByTargetItemName(dep.getItemName());
+            if (tasks != null) {
+                for (Task t : tasks) {
+                    if (t != null && !seen.contains(t.getId()) && !completed.contains(t.getId())) {
+                        seen.add(t.getId());
+                        matched.add(t);
+                    }
+                }
+            }
+        }
+
+        log.info("ITEM goal '{}': {} dep nodes → {} matched tasks",
+                spec.getTargetName(), deps.size(), matched.size());
+
+        return CompositeGoal.builder()
+                .root(spec)
+                .taskBatch(matched)
+                .pointsGap(0)
+                .coveredBy(0)
+                .reachable(true)
+                .build();
+    }
+
+    /**
+     * Finds tasks whose {@code targetItems} list contains an item with the given
+     * display name (case-insensitive substring match).
+     */
+    private List<Task> findByTargetItemName(String itemName) {
+        if (itemName == null) return Collections.emptyList();
+        String lower = itemName.toLowerCase();
+        List<Task> result = new ArrayList<>();
+        for (Task t : taskRepo.getAllTasks()) {
+            if (t.getTargetItems() != null) {
+                for (com.leaguesai.data.model.Task.ItemTarget it : t.getTargetItems()) {
+                    if (it != null && it.getName() != null
+                            && it.getName().toLowerCase().contains(lower)) {
+                        result.add(t);
+                        break;
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     /**

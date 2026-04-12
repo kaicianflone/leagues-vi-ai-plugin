@@ -11,8 +11,10 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -215,6 +217,32 @@ public class GoalStore {
     }
 
     // -------------------------------------------------------------------------
+    // Session plan persistence (goal text + ordered task IDs)
+    // -------------------------------------------------------------------------
+
+    public synchronized void saveCurrentPlan(String goalText, List<String> taskIds) {
+        state.currentGoalText = goalText;
+        state.currentPlanTaskIds = taskIds != null ? new ArrayList<>(taskIds) : null;
+        save();
+    }
+
+    public synchronized String getCurrentGoalText() {
+        return state.currentGoalText;
+    }
+
+    public synchronized List<String> getCurrentPlanTaskIds() {
+        return state.currentPlanTaskIds != null
+                ? Collections.unmodifiableList(state.currentPlanTaskIds)
+                : null;
+    }
+
+    public synchronized void clearCurrentPlan() {
+        state.currentGoalText = null;
+        state.currentPlanTaskIds = null;
+        save();
+    }
+
+    // -------------------------------------------------------------------------
     // Persistence
     // -------------------------------------------------------------------------
 
@@ -302,6 +330,10 @@ public class GoalStore {
         Set<String> selectedPactIds = new LinkedHashSet<>();
         int respecsUsed = 0;
 
+        // Session persistence: last active plan. Null when no plan is saved.
+        String currentGoalText;
+        List<String> currentPlanTaskIds;
+
         State ensureInitialized() {
             if (relicGoals == null) relicGoals = new LinkedHashSet<>();
             if (areaGoals == null) areaGoals = new LinkedHashSet<>();
@@ -309,7 +341,8 @@ public class GoalStore {
             if (gearGoalIds == null) gearGoalIds = new LinkedHashSet<>();
             if (unlocked == null) unlocked = new LinkedHashSet<>();
             if (selectedPactIds == null) selectedPactIds = new LinkedHashSet<>();
-            // respecsUsed is a primitive int — Gson defaults it to 0 for missing fields.
+            // respecsUsed, currentGoalText, currentPlanTaskIds: primitives/nullable —
+            // Gson defaults them to 0/null for old files, which is correct.
             return this;
         }
     }

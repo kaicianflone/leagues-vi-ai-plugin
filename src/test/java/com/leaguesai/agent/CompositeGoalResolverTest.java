@@ -22,7 +22,7 @@ public class CompositeGoalResolverTest {
     @Before
     public void setUp() {
         repo = mock(TaskRepository.class);
-        planner = new GoalPlanner(repo);
+        planner = new GoalPlanner(repo, null);
         when(repo.getByArea(anyString())).thenReturn(Collections.emptyList());
     }
 
