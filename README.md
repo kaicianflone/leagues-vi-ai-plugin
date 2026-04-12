@@ -124,7 +124,7 @@ flowchart LR
         ChatPanel --> ChatService
         ChatService --> GoalSpecParser
         GoalSpecParser --> GoalPlanner
-        ItemDependencyGraph[(ItemDependencyGraph<br/>BFS item graph)] -->|knownNames / expand| GoalSpecParser
+        ItemDependencyGraph[(ItemDependencyGraph<br/>BFS item graph)] -->|findLongestMatchingItem / expand| GoalSpecParser
         GoalPlanner -->|CompositeGoal| ChatService
         ChatService --> PromptBuilder
         PromptBuilder --> LlmClient

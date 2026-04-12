@@ -51,9 +51,10 @@ Builds are portable JSON files you can pass around in Discord.
   in-flight chat plans when a build is activated, preventing stale-plan races.
 - **`ItemDependencyGraph`** — in-memory BFS over the `item_dependencies` SQLite table.
   `expand(itemId)` returns all dependency rows in prerequisite-first order (depth-capped
-  at 20, cycle-safe). `knownNames()` exposes the name-to-id key set for substring scan.
+  at 20, cycle-safe). `knownNames()` exposes the name-to-id key set; `findLongestMatchingItem(phrase)`
+  pre-sorts names longest-first so O(k) break-on-first match replaces a full-set scan.
   Loaded on a background thread; `volatile` fields guarantee cross-thread visibility to
-  EDT reads via `expand()`/`findItemByName()`.
+  EDT reads via `expand()`/`findItemByName()`/`findLongestMatchingItem()`.
 - **`ObtainMethod` enum** — SMITHED / CRAFTED / FLETCHED / HERBLORE / COOKED (recursable
   into ingredient chains) vs DROPPED / QUEST_REWARD / SHOP / SKILL_REWARD (terminal leaf).
 - **`ItemDependency` model** (`@Value @Builder`) — itemId, itemName, obtainMethod, sourceId,
@@ -63,8 +64,11 @@ Builds are portable JSON files you can pass around in Discord.
 - **`ChatHistoryStore`** — persists chat history across plugin restarts at
   `~/.runelite/leagues-ai/data/chat_history.json`. Same atomic write pattern as GoalStore.
 - **`GoalType.ITEM`** + **`GoalSpecParser` item detection arm** — keyword-gated (`get` /
-  `need` / `want` / `farm` / `craft` / `obtain`) substring scan via `knownNames()` picks
-  the longest matching item name in the phrase and resolves it to a `GoalSpec{type=ITEM}`.
+  `need` / `want` / `farm` / `craft` / `obtain` and natural-language variants) uses
+  `findLongestMatchingItem()` to pick the longest matching item name in the phrase and
+  resolves it to a `GoalSpec{type=ITEM}`. `ChatService.maybeTriggerPlanner` is also gated
+  on the same check so item-intent phrases trigger goal planning without `/plan` slash
+  commands.
 - **`GoalPlanner.resolveItemGoal`** — BFS-expands the item dep graph, maps source tasks
   against the live task list, filters by completion/skill/area, returns a `CompositeGoal`.
 
@@ -94,6 +98,24 @@ Builds are portable JSON files you can pass around in Discord.
   both rebuild branches so history survives re-authentication.
 - `GoalStore.clearAllGoals`: nulls `currentGoalText` and `currentPlanTaskIds` so a cleared
   goal queue no longer restores a ghost plan on the next plugin restart.
+- `GoalPlanner.resolveItemGoal`: N+1 query fixed — `taskRepo.getAllTasks()` now hoisted
+  outside the dependency loop (was one DB round-trip per dep; now one total).
+- `ProximityOptimizer`: level assignment replaced with a convergence loop (Bellman-Ford
+  style) — single-pass was assigning `level=0` to prereqs that appeared later in the
+  step list, producing wrong topological ordering.
+- `LeaguesAiPlugin.startUp`: `setupPanelCallbacks()` now runs before `loadDatabaseAsync`
+  is submitted — fixes a race where `restoreSavedSession` fired before callbacks were
+  wired and the restored plan was silently dropped.
+- `LeaguesAiPlugin.activateBuild`: now routed through `llmExecutor` — serialises build
+  activation with in-flight chat plans, preventing a race that could overwrite an active
+  plan mid-stream.
+- `LeaguesAiPlugin.activateBuild`: null guard on `finalSteps.get(0)` — no longer crashes
+  when the planner returns an empty step list (e.g. all gear tasks already complete).
+- `BuildStore.importFromFile`: guard against empty `builds` array — `{"builds":[]}` was
+  crashing with `IndexOutOfBoundsException`; now throws a readable `IllegalArgumentException`.
+- `BuildStore.persist`: returns `boolean`; `importFromFile` throws if the write fails so
+  callers get an explicit error instead of silent data loss.
+- `ChatHistoryStore`: swallowed `IOException` on save now logged via `@Slf4j` `warn`.
 
 ---
 
@@ -243,4 +265,4 @@ Tracked in `CLAUDE.md` under "Phase 2 TODO":
 - Populate `areas.unlock_cost` once the wiki publishes costs
 - Populate `pacts.parent_id` + `unlock_requires` if the wiki documents the tree
 - Hook `GoalStore.isUnlocked` into a `LeagueStatusMonitor` for real in-game state
-- Tiered pacts UI with 40-slot budget + 3-respec tracker (Phase 2 PR 3)
+- ~~Tiered pacts UI with 40-slot budget + 3-respec tracker~~ — shipped in PR 3 (`GoalStore.selectPact` / `deselectPact` / `resetPacts`, `MAX_PACT_SLOTS=40`, `MAX_RESPECS=3`)
