@@ -11,6 +11,7 @@ A RuneLite plugin that acts as an AI-powered coach for Old School RuneScape's **
 - **Builds system.** Load a curated build ("Melee Bosser", "Ranged PvM DPS", "Skiller", etc.) from the Goals tab. The planner automatically chains every relic/area/pact/gear-task prerequisite. Export builds as JSON files to share with friends via Discord; import with one click.
 - **Chat coach.** Ask "what should I do next?", "how do I unlock Grimoire?", or "plan out all the Karamja medium tasks" — the assistant reads your live inventory, levels, equipment, completed tasks, and unlocked areas, then answers with a real plan built from a local task database, not a hallucination.
 - **Chained goal planner.** Click "Set as goal" on any relic, area, or demonic pact in the side panel. The planner computes the league-point gap between your current balance and the target's unlock cost, filters tasks by what you can actually do (skill gates, area unlocks, quest prereqs), and returns a specific batch of tasks ordered by points-per-effort.
+- **Ironman item dependency planner.** Type "get rune platebody" or "I need dragon scimitar" in chat — the plugin traces every ingredient, drop source, and skill gate back through an in-memory BFS graph (`ItemDependencyGraph`), then surfaces the task batch that actually gets you the item with no wiki tab-switching required.
 - **Quest Helper-style overlays.** Once a plan is loaded, the plugin activates minimap arrows, a world arrow, path lines, and world map markers for the active step. Ported 1:1 from [Quest Helper](https://github.com/Zoinkwiz/quest-helper) under BSD-2-Clause. Tile, NPC, object, and ground-item highlights exist as hand-rolled placeholders pending a proper QH port (see `CLAUDE.md`).
 - **Adversarial plan review.** Every generated plan is reviewed by three LLM personas (B0aty / Faux / a top UIM player) who each pick the single biggest flaw in the plan from their lens. Output shows as a banner at the top of the Goals tab.
 - **Heartbeat coaching.** A short contextual coaching line updates every 60 seconds based on what you're doing (e.g. "Looking good — two more fishing spots and you've got Karamja easy done").
@@ -123,6 +124,7 @@ flowchart LR
         ChatPanel --> ChatService
         ChatService --> GoalSpecParser
         GoalSpecParser --> GoalPlanner
+        ItemDependencyGraph[(ItemDependencyGraph<br/>BFS item graph)] -->|knownNames / expand| GoalSpecParser
         GoalPlanner -->|CompositeGoal| ChatService
         ChatService --> PromptBuilder
         PromptBuilder --> LlmClient
@@ -185,23 +187,26 @@ leagues-vi-ai-plugin/
 │   ├── core/                     EventBus, state monitors, service plumbing
 │   ├── data/                     TaskRepository, DatabaseLoader, DatabaseSeeder,
 │   │                             GoalStore, BuildStore, GearRepository, VectorIndex,
-│   │                             models/ (Build, GearItem, GearSlot, ...)
+│   │                             ChatHistoryStore,
+│   │                             models/ (Build, GearItem, GearSlot, ItemDependency, ...)
 │   ├── agent/                    ChatService, GoalPlanner, GoalSpecParser,
 │   │                             BuildExpander, ProximityOptimizer,
+│   │                             ItemDependencyGraph, ObtainMethod,
 │   │                             PromptBuilder, PersonaReviewer, LLM clients
 │   ├── overlay/                  Minimap/Arrow/Path/WorldMap overlays (QH ports)
 │   └── ui/                       ChatPanel, GoalsPanel, BuildsPanel,
 │                                 UnlockablesPanel, SettingsPanel, GoalAccordion
 ├── src/main/resources/
-│   ├── gear.json                 25 Leagues-relevant gear items (slots, skill reqs,
-│   │                             task overrides for launch-day reliability)
+│   ├── gear.json                 100+ Leagues-relevant gear items across all 10 regions
+│   │                             (slots, skill reqs, task overrides for launch-day reliability)
 │   ├── builds.json               5 seeded build archetypes
 │   └── leagues-vi-tasks.db       Bundled DB snapshot (seeded on first install)
-├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4) — 44 test files
+├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4) — 40 test files
 ├── scraper/                      Standalone scraper subproject
 │   └── src/main/java/com/leaguesai/scraper/
 │       ├── WikiScraper.java            Demonic Pacts League task scraper
 │       ├── DemonicPactsScraper.java    Leagues VI relics/areas/pacts scraper
+│       ├── ItemDependencyScraper.java  MediaWiki Lua module parser for item deps
 │       ├── TaskItemExtractor.java      Extracts equipment targets from task text
 │       ├── ItemStatsScraper.java       Resolves item wiki IDs + stats
 │       ├── HtmlParser.java             Jsoup-based wiki parsing

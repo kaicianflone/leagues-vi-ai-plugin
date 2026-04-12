@@ -49,6 +49,24 @@ Builds are portable JSON files you can pass around in Discord.
   Verb allowlist: equip/obtain/acquire/wear/wield (no false positives on diary verbs).
 - **`ChatService.cancelPendingPlan`** — atomic `planGeneration` increment that invalidates
   in-flight chat plans when a build is activated, preventing stale-plan races.
+- **`ItemDependencyGraph`** — in-memory BFS over the `item_dependencies` SQLite table.
+  `expand(itemId)` returns all dependency rows in prerequisite-first order (depth-capped
+  at 20, cycle-safe). `knownNames()` exposes the name-to-id key set for substring scan.
+  Loaded on a background thread; `volatile` fields guarantee cross-thread visibility to
+  EDT reads via `expand()`/`findItemByName()`.
+- **`ObtainMethod` enum** — SMITHED / CRAFTED / FLETCHED / HERBLORE / COOKED (recursable
+  into ingredient chains) vs DROPPED / QUEST_REWARD / SHOP / SKILL_REWARD (terminal leaf).
+- **`ItemDependency` model** (`@Value @Builder`) — itemId, itemName, obtainMethod, sourceId,
+  sourceName, skillRequired, skillLevel, qtyNeeded, outputQty, areaRequired.
+- **`ItemDependencyScraper`** (scraper module) — parses the MediaWiki Lua Module:
+  `Obtaining` pages via 3-retry backoff, writes rows into `item_dependencies` table.
+- **`ChatHistoryStore`** — persists chat history across plugin restarts at
+  `~/.runelite/leagues-ai/data/chat_history.json`. Same atomic write pattern as GoalStore.
+- **`GoalType.ITEM`** + **`GoalSpecParser` item detection arm** — keyword-gated (`get` /
+  `need` / `want` / `farm` / `craft` / `obtain`) substring scan via `knownNames()` picks
+  the longest matching item name in the phrase and resolves it to a `GoalSpec{type=ITEM}`.
+- **`GoalPlanner.resolveItemGoal`** — BFS-expands the item dep graph, maps source tasks
+  against the live task list, filters by completion/skill/area, returns a `CompositeGoal`.
 
 ### Changed
 
@@ -69,6 +87,13 @@ Builds are portable JSON files you can pass around in Discord.
 - `BuildsPanel.executor` (`ExecutorService`) now shut down in `LeaguesAiPlugin.shutDown()`
   via `BuildsPanel.shutdown()`.
 - `BuildStore`: hardcoded `"max 5 builds per file"` string replaced with constant reference.
+- `LeaguesAiPlugin.activateBuild`: bare Swing mutations on the `llmExecutor` thread wrapped
+  in `SwingUtilities.invokeLater` — prevents EDT violations on build activation.
+- `LeaguesAiPlugin`: `chatHistoryStore` was dropped when `ChatService` was rebuilt on
+  Codex OAuth and API-key change paths. Now set via `chatService.setHistoryStore(...)` in
+  both rebuild branches so history survives re-authentication.
+- `GoalStore.clearAllGoals`: nulls `currentGoalText` and `currentPlanTaskIds` so a cleared
+  goal queue no longer restores a ghost plan on the next plugin restart.
 
 ---
 
