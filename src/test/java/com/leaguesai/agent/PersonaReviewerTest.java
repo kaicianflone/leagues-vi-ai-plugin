@@ -52,9 +52,10 @@ public class PersonaReviewerTest {
         ArgumentCaptor<List<OpenAiClient.Message>> msgs = ArgumentCaptor.forClass(List.class);
         verify(client).chatCompletion(anyString(), msgs.capture());
         String prompt = msgs.getValue().get(0).getContent();
-        assertTrue("prompt should mention B0aty", prompt.contains("B0aty"));
-        assertTrue("prompt should mention Faux", prompt.contains("Faux"));
-        assertTrue("prompt should mention UIM", prompt.contains("UIM"));
+        // With no UserPreferences set, all 9 personas are active — spot-check a few
+        assertTrue("prompt should mention Points Chaser", prompt.contains("Points Chaser"));
+        assertTrue("prompt should mention Pragmatist", prompt.contains("Pragmatist"));
+        assertTrue("prompt should mention SirPugger", prompt.contains("SirPugger"));
         assertTrue("prompt should include the goal", prompt.contains("goal"));
     }
 

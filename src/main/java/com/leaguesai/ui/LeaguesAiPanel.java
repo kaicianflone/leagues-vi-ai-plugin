@@ -53,11 +53,29 @@ public class LeaguesAiPanel extends PluginPanel {
         setLayout(new BorderLayout(0, 0));
         setBackground(BACKGROUND_COLOR);
 
-        // Top panel: sprite + status + progress
+        // Top panel: gear icon row + sprite + status + progress
         JPanel topPanel = new JPanel();
         topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
         topPanel.setBackground(BACKGROUND_COLOR);
-        topPanel.setBorder(BorderFactory.createEmptyBorder(6, 6, 4, 6));
+        topPanel.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+
+        // Gear icon row — settings button pinned to the top-right
+        JButton gearButton = new JButton("\u2699");
+        gearButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 14));
+        gearButton.setForeground(new Color(160, 160, 160));
+        gearButton.setBackground(BACKGROUND_COLOR);
+        gearButton.setBorderPainted(false);
+        gearButton.setFocusPainted(false);
+        gearButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        gearButton.setToolTipText("Settings");
+        gearButton.addActionListener(e -> switchTab(TAB_SETTINGS));
+
+        JPanel gearRow = new JPanel(new BorderLayout());
+        gearRow.setBackground(BACKGROUND_COLOR);
+        gearRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+        gearRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        gearRow.add(gearButton, BorderLayout.EAST);
+        topPanel.add(gearRow);
 
         spriteRenderer = new AsciiSpriteRenderer(animationSpeed);
         spriteRenderer.setAlignmentX(Component.CENTER_ALIGNMENT);

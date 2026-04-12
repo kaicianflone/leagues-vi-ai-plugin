@@ -2,7 +2,6 @@ package com.leaguesai.ui;
 
 import com.leaguesai.agent.CoachPulseService;
 import com.leaguesai.agent.HeartbeatProvider;
-import com.leaguesai.agent.HeartbeatProvider.HeartbeatState;
 import com.leaguesai.agent.HeartbeatProvider.PlanProgress;
 import com.leaguesai.agent.PlayerContext;
 import com.leaguesai.agent.PlayerContextAssembler;
@@ -18,9 +17,10 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Drives the once-per-minute heartbeat label in both ChatPanel and
- * GoalsPanel. Every 5th tick, defers to {@link CoachPulseService} for a
- * richer LLM-backed pulse instead of the local rules.
+ * Drives the once-per-minute coaching pulse. Every 5th tick defers to
+ * {@link CoachPulseService} for a richer LLM-backed message; other ticks
+ * use local rules. Messages are delivered as chat bubbles via
+ * {@link ChatPanel#appendMessage}.
  *
  * <p>Threading:
  * <ul>
@@ -29,8 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       This is required because {@code PlayerContextAssembler.assemble()}
  *       blocks the calling thread for up to 5 seconds waiting on the
  *       RuneLite ClientThread, which would freeze the UI if done on the EDT.</li>
- *   <li>The local-rule render and the LLM pulse render both post back to
- *       the EDT via {@code SwingUtilities.invokeLater}.</li>
+ *   <li>The chat-append post back to the EDT via {@code SwingUtilities.invokeLater}.</li>
  *   <li>{@code llmExecutor} is single-threaded, so {@code lastXp},
  *       {@code lastCompletedCount}, and other mutable tick state are
  *       only touched from one thread (no synchronization required).</li>
@@ -45,7 +44,6 @@ public class HeartbeatTicker {
     static final int LLM_PULSE_EVERY_N_TICKS = 5;
 
     private final ChatPanel chatPanel;
-    private final GoalsPanel goalsPanel;
     private final HeartbeatProvider localProvider;
     private final CoachPulseService coachPulseService;
     private final PlayerContextAssembler contextAssembler;
@@ -67,13 +65,11 @@ public class HeartbeatTicker {
     private Timer timer;
 
     public HeartbeatTicker(ChatPanel chatPanel,
-                           GoalsPanel goalsPanel,
                            HeartbeatProvider localProvider,
                            CoachPulseService coachPulseService,
                            PlayerContextAssembler contextAssembler,
                            ExecutorService llmExecutor) {
         this.chatPanel = chatPanel;
-        this.goalsPanel = goalsPanel;
         this.localProvider = localProvider;
         this.coachPulseService = coachPulseService;
         this.contextAssembler = contextAssembler;
@@ -188,7 +184,8 @@ public class HeartbeatTicker {
     }
 
     private void render(String text) {
-        if (chatPanel != null) chatPanel.setHeartbeatText(text);
-        if (goalsPanel != null) goalsPanel.setHeartbeatText(text);
+        if (chatPanel != null && text != null && !text.isEmpty()) {
+            chatPanel.appendMessage("Coach", text);
+        }
     }
 }

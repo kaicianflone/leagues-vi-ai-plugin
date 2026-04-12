@@ -2,6 +2,7 @@ package com.leaguesai.agent;
 
 import com.leaguesai.data.ChatHistoryStore;
 import com.leaguesai.data.TaskRepository;
+import com.leaguesai.data.UserPreferences;
 import com.leaguesai.data.VectorIndex;
 import com.leaguesai.data.model.Task;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +46,9 @@ public class ChatService {
     // Optional history store for session persistence. Null = no persistence
     // (tests and pre-load state). Set by LeaguesAiPlugin after DB loads.
     private volatile ChatHistoryStore historyStore;
+
+    // Optional user preferences (model + persona selection). Null = all personas.
+    private volatile UserPreferences userPreferences;
 
     /** Functional callback so we can pass three args without nesting BiConsumers. */
     @FunctionalInterface
@@ -121,7 +125,9 @@ public class ChatService {
             // Assemble player context and build system prompt while still in sync
             // (contextAssembler.assemble() routes through ClientThread — safe to call here)
             PlayerContext ctx = contextAssembler.assemble();
-            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks, taskRepo);
+            java.util.List<String> personas = userPreferences != null
+                    ? userPreferences.getSelectedPersonas() : null;
+            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks, taskRepo, null, personas);
 
             // Snapshot: copy the list so the network call doesn't need the lock
             snapshot = new ArrayList<>(conversationHistory);
@@ -173,6 +179,12 @@ public class ChatService {
     /** Plugs in the history store for session persistence across restarts. */
     public void setHistoryStore(ChatHistoryStore store) {
         this.historyStore = store;
+    }
+
+    /** Plugs in user preferences (model + persona selection). */
+    public void setUserPreferences(UserPreferences prefs) {
+        this.userPreferences = prefs;
+        if (personaReviewer != null) personaReviewer.setUserPreferences(prefs);
     }
 
     /** Plugs in the item dependency graph for item goal detection in GoalSpecParser,
@@ -380,11 +392,8 @@ public class ChatService {
             contextAssembler.setCurrentPlan(steps);
             log.info("Planner: built {} planned steps for goal '{}'", steps.size(), userMessage);
 
-            // Enrich the plan with item sources + run persona review. Two LLM
-            // calls. Skipped entirely when the step list is empty (composite
-            // PACT goals, or composite relic/area goals where the player can
-            // already afford the unlock) — running a persona review on an
-            // empty plan burns tokens and produces junk verdict text.
+            // Enrich the plan with item sources + run persona review with rebuild loop.
+            // Skipped when the step list is empty (composite PACT goals etc.).
             List<PlannedStep> enriched = steps;
             String review = null;
             if (!steps.isEmpty()) {
@@ -397,10 +406,45 @@ public class ChatService {
                 }
 
                 if (personaReviewer != null) {
-                    try {
-                        review = personaReviewer.review(userMessage, enriched);
-                    } catch (Exception revErr) {
-                        log.warn("Persona review failed: {}", revErr.getMessage());
+                    // Rebuild loop: if personas say "rebuild", reorder the plan using their
+                    // critique and re-review. Cap at MAX_REVIEW_RETRIES to avoid runaway cost.
+                    final int MAX_REVIEW_RETRIES = 3;
+                    String priorCritique = null;
+                    for (int attempt = 0; attempt < MAX_REVIEW_RETRIES; attempt++) {
+                        try {
+                            review = personaReviewer.review(userMessage, enriched, priorCritique);
+                        } catch (Exception revErr) {
+                            log.warn("Persona review attempt {} failed: {}", attempt + 1, revErr.getMessage());
+                            break;
+                        }
+                        String verdict = PersonaReviewer.extractVerdict(review);
+                        log.info("Persona review attempt {}/{}: verdict={}", attempt + 1, MAX_REVIEW_RETRIES, verdict);
+                        if (!"rebuild".equals(verdict)) break;
+                        if (attempt == MAX_REVIEW_RETRIES - 1) {
+                            log.info("Persona review: still rebuild after {} attempts, keeping final review", MAX_REVIEW_RETRIES);
+                            break;
+                        }
+                        // Try to reorder the plan based on persona critique
+                        try {
+                            String refinementPrompt = PromptBuilder.buildPlanRefinementPrompt(
+                                    userMessage, enriched, review);
+                            String refinementReply = openAiClient.chatCompletion(
+                                    "You are a Leagues VI plan optimizer. Respond with only a JSON array of task IDs.",
+                                    java.util.Collections.singletonList(
+                                            new OpenAiClient.Message("user", refinementPrompt)));
+                            List<PlannedStep> reordered = reorderByLlmSuggestion(enriched, refinementReply);
+                            if (!reordered.isEmpty()) {
+                                priorCritique = review;
+                                enriched = reordered;
+                                log.info("Planner: rebuilt plan ({} steps) after persona critique", enriched.size());
+                            } else {
+                                log.warn("Persona rebuild: LLM reorder produced empty list, keeping current order");
+                                break;
+                            }
+                        } catch (Exception refineErr) {
+                            log.warn("Plan refinement call failed: {}", refineErr.getMessage());
+                            break;
+                        }
                     }
                 }
             } else {
@@ -472,5 +516,42 @@ public class ChatService {
                             .build();
                 })
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Parses the LLM's JSON array of task IDs and reorders {@code steps} to match.
+     * Tasks not mentioned by the LLM are appended at the end. Returns an empty
+     * list if parsing fails entirely.
+     */
+    private static List<PlannedStep> reorderByLlmSuggestion(List<PlannedStep> steps, String json) {
+        if (json == null || json.isEmpty()) return Collections.emptyList();
+        // Extract the JSON array portion (LLM sometimes adds surrounding text)
+        int start = json.indexOf('[');
+        int end = json.lastIndexOf(']');
+        if (start < 0 || end <= start) return Collections.emptyList();
+        String arrayStr = json.substring(start + 1, end);
+        // Parse quoted IDs
+        java.util.List<String> orderedIds = new java.util.ArrayList<>();
+        for (String token : arrayStr.split(",")) {
+            String id = token.replaceAll("[\"'\\s]", "");
+            if (!id.isEmpty()) orderedIds.add(id);
+        }
+        if (orderedIds.isEmpty()) return Collections.emptyList();
+
+        // Build id → step map
+        java.util.Map<String, PlannedStep> byId = new java.util.LinkedHashMap<>();
+        for (PlannedStep s : steps) {
+            if (s.getTask() != null && s.getTask().getId() != null) {
+                byId.put(s.getTask().getId(), s);
+            }
+        }
+        List<PlannedStep> reordered = new java.util.ArrayList<>();
+        for (String id : orderedIds) {
+            PlannedStep s = byId.remove(id);
+            if (s != null) reordered.add(s);
+        }
+        // Append any steps not mentioned by the LLM
+        reordered.addAll(byId.values());
+        return reordered;
     }
 }

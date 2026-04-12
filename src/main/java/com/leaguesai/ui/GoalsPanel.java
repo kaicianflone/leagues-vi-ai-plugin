@@ -6,6 +6,7 @@ import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.ScrollPaneConstants;
@@ -14,7 +15,10 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.Container;
+import java.awt.GridLayout;
 import java.util.List;
 
 /**
@@ -24,11 +28,8 @@ import java.util.List;
  *   <li>Goal title + progress label</li>
  *   <li>Coach review banner (B0aty / Faux / UIM verdict from {@code PersonaReviewer})</li>
  *   <li>{@link GoalAccordion} of tasks → expand to items + subtasks + wiki</li>
- *   <li>Heartbeat label (driven by {@code HeartbeatTicker})</li>
  *   <li>"Open chat" link button at the top</li>
  * </ul>
- *
- * <p>No more "Refresh advice" button — the heartbeat replaces it.
  */
 public class GoalsPanel extends JPanel {
 
@@ -37,7 +38,6 @@ public class GoalsPanel extends JPanel {
     private static final Color LABEL_COLOR = new Color(160, 160, 160);
     private static final Color BANNER_BG = new Color(50, 40, 30);
     private static final Color BANNER_FG = new Color(255, 200, 120);
-    private static final Color HEARTBEAT_FG = new Color(150, 200, 150);
     private static final Color LINK_FG = new Color(120, 170, 240);
     private static final Color BORDER_COLOR = new Color(60, 60, 60);
 
@@ -50,7 +50,6 @@ public class GoalsPanel extends JPanel {
     private final JLabel reviewBanner;
     private final JPanel reviewWrapper;
     private final GoalAccordion accordion;
-    private final JLabel heartbeatLabel;
     private final JLabel emptyStateLabel;
     private final JButton chatLinkButton;
     private UnlockablesPanel unlockables;
@@ -61,11 +60,17 @@ public class GoalsPanel extends JPanel {
     private final JPanel goalQueuePanel;
     private final JLabel goalQueueLabel;
     private final JButton planGoalsButton;
+    private final JButton clearGoalsButton;
     private final JButton saveGoalsButton;
+
+    // Top-left clear-plan button (visible when a plan is active)
+    private final JButton clearPlanButton;
+    private Runnable onClearPlan;
 
     private Runnable onOpenChat;
     private Runnable onBrowseBuilds;
     private Runnable onPlanGoals;
+    private Runnable onClearGoals;
     private Runnable onSaveGoalsAsBuild;
 
     public GoalsPanel() {
@@ -92,12 +97,33 @@ public class GoalsPanel extends JPanel {
             if (onOpenChat != null) onOpenChat.run();
         });
 
+        clearPlanButton = new JButton("Clear \u2715");
+        clearPlanButton.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 10));
+        clearPlanButton.setBackground(new Color(60, 35, 35));
+        clearPlanButton.setForeground(new Color(220, 140, 140));
+        clearPlanButton.setFocusPainted(false);
+        clearPlanButton.setBorderPainted(false);
+        clearPlanButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        clearPlanButton.setVisible(false);  // shown only when a plan is active
+        clearPlanButton.addActionListener(e -> {
+            int choice = JOptionPane.showConfirmDialog(
+                    GoalsPanel.this,
+                    "Clear the current goal and plan?",
+                    "Clear Goal",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (choice == JOptionPane.YES_OPTION && onClearPlan != null) {
+                onClearPlan.run();
+            }
+        });
+
         JPanel linkRow = new JPanel(new BorderLayout());
         linkRow.setBackground(BACKGROUND_COLOR);
+        linkRow.add(clearPlanButton, BorderLayout.WEST);
         linkRow.add(chatLinkButton, BorderLayout.EAST);
         linkRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         // Cap height so BoxLayout.Y_AXIS doesn't stretch the link row vertically.
-        linkRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 24));
+        linkRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
         goalLabel = new JLabel("Goal: (none set)");
         goalLabel.setForeground(TEXT_COLOR);
@@ -127,6 +153,7 @@ public class GoalsPanel extends JPanel {
         reviewWrapper.setBackground(BACKGROUND_COLOR);
         reviewWrapper.add(reviewBanner, BorderLayout.CENTER);
         reviewWrapper.setAlignmentX(Component.LEFT_ALIGNMENT);
+        reviewWrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         reviewWrapper.setVisible(false);
 
         top.add(linkRow);
@@ -137,7 +164,7 @@ public class GoalsPanel extends JPanel {
         top.add(reviewWrapper);
 
         // ---- Pending goals queue bar (shown between top and scroll when goals are staged) ----
-        goalQueueLabel = new JLabel("0 goals staged");
+        goalQueueLabel = new JLabel(" ");
         goalQueueLabel.setForeground(GOAL_QUEUE_FG);
         goalQueueLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 10));
 
@@ -150,7 +177,16 @@ public class GoalsPanel extends JPanel {
         planGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         planGoalsButton.addActionListener(e -> { if (onPlanGoals != null) onPlanGoals.run(); });
 
-        saveGoalsButton = new JButton("Save as build");
+        clearGoalsButton = new JButton("Clear goals");
+        clearGoalsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+        clearGoalsButton.setBackground(new Color(60, 35, 35));
+        clearGoalsButton.setForeground(new Color(220, 160, 160));
+        clearGoalsButton.setFocusPainted(false);
+        clearGoalsButton.setBorderPainted(false);
+        clearGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        clearGoalsButton.addActionListener(e -> { if (onClearGoals != null) onClearGoals.run(); });
+
+        saveGoalsButton = new JButton("Save as Build");
         saveGoalsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
         saveGoalsButton.setBackground(new Color(40, 55, 75));
         saveGoalsButton.setForeground(new Color(160, 190, 230));
@@ -159,15 +195,16 @@ public class GoalsPanel extends JPanel {
         saveGoalsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         saveGoalsButton.addActionListener(e -> { if (onSaveGoalsAsBuild != null) onSaveGoalsAsBuild.run(); });
 
-        // Label row
+        // Label row — HTML-wrapped so long goal names word-wrap inside the panel
+        // instead of extending it beyond the ~210px plugin panel width.
         JPanel goalQueueLabelRow = new JPanel(new BorderLayout());
         goalQueueLabelRow.setOpaque(false);
-        goalQueueLabelRow.add(goalQueueLabel, BorderLayout.WEST);
+        goalQueueLabelRow.add(goalQueueLabel, BorderLayout.CENTER);
 
-        // Buttons row — equal-width side-by-side
+        // Buttons row: [Clear goals] [Plan n goals]
         JPanel goalQueueButtons = new JPanel(new java.awt.GridLayout(1, 2, 4, 0));
         goalQueueButtons.setOpaque(false);
-        goalQueueButtons.add(saveGoalsButton);
+        goalQueueButtons.add(clearGoalsButton);
         goalQueueButtons.add(planGoalsButton);
 
         goalQueuePanel = new JPanel();
@@ -196,7 +233,15 @@ public class GoalsPanel extends JPanel {
 
         top.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        centerColumn = new JPanel();
+        centerColumn = new JPanel() {
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension d = super.getPreferredSize();
+                Container p = getParent();
+                if (p != null) d.width = p.getWidth();
+                return d;
+            }
+        };
         centerColumn.setLayout(new BoxLayout(centerColumn, BoxLayout.Y_AXIS));
         centerColumn.setBackground(BACKGROUND_COLOR);
         centerColumn.add(top);
@@ -212,10 +257,8 @@ public class GoalsPanel extends JPanel {
         JScrollPane scroll = new JScrollPane(centerColumn);
         scroll.setBorder(null);
         scroll.getViewport().setBackground(BACKGROUND_COLOR);
-        // Safety net: if any row decides to be wider than the viewport
-        // (e.g. a very long word that can't wrap), fall back to a
-        // horizontal scrollbar instead of silently clipping.
-        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
 
         // Goal queue bar sits above the scroll pane, pinned at NORTH.
@@ -226,12 +269,7 @@ public class GoalsPanel extends JPanel {
         add(centerWrapper, BorderLayout.CENTER);
         emptyStateLabel.setVisible(true);
 
-        // ---- Bottom: heartbeat + Browse Builds button ----
-        heartbeatLabel = new JLabel(" ");
-        heartbeatLabel.setForeground(HEARTBEAT_FG);
-        heartbeatLabel.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
-        heartbeatLabel.setBorder(BorderFactory.createEmptyBorder(6, 4, 2, 4));
-
+        // ---- Bottom: button row ----
         JButton browseBuildsButton = new JButton("Browse Builds \u2197");
         browseBuildsButton.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
         browseBuildsButton.setBackground(new Color(45, 50, 60));
@@ -239,16 +277,20 @@ public class GoalsPanel extends JPanel {
         browseBuildsButton.setFocusPainted(false);
         browseBuildsButton.setBorderPainted(false);
         browseBuildsButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        browseBuildsButton.setAlignmentX(Component.LEFT_ALIGNMENT);
         browseBuildsButton.addActionListener(e -> {
             if (onBrowseBuilds != null) onBrowseBuilds.run();
         });
 
-        JPanel bottomPanel = new JPanel();
-        bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
+        // Save as Build + Browse Builds on the same row
+        JPanel buildButtonRow = new JPanel(new GridLayout(1, 2, 4, 0));
+        buildButtonRow.setBackground(BACKGROUND_COLOR);
+        buildButtonRow.add(saveGoalsButton);
+        buildButtonRow.add(browseBuildsButton);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout(0, 2));
         bottomPanel.setBackground(BACKGROUND_COLOR);
-        bottomPanel.add(heartbeatLabel);
-        bottomPanel.add(browseBuildsButton);
+        bottomPanel.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
+        bottomPanel.add(buildButtonRow, BorderLayout.CENTER);
 
         add(bottomPanel, BorderLayout.SOUTH);
     }
@@ -272,7 +314,7 @@ public class GoalsPanel extends JPanel {
                 // HTML with explicit width hint so JLabel wraps inside the
                 // ~225px PluginPanel column. Newlines become <br>.
                 String safe = escapeHtml(review).replace("\n", "<br>");
-                reviewBanner.setText("<html><div style='width:190px'>" + safe + "</div></html>");
+                reviewBanner.setText("<html><body>" + safe + "</body></html>");
                 reviewWrapper.setVisible(true);
             }
             revalidate();
@@ -290,24 +332,11 @@ public class GoalsPanel extends JPanel {
     public void setSteps(List<PlannedStep> steps) {
         SwingUtilities.invokeLater(() -> {
             accordion.setSteps(steps);
-            emptyStateLabel.setVisible(steps == null || steps.isEmpty());
+            boolean hasPlan = steps != null && !steps.isEmpty();
+            emptyStateLabel.setVisible(!hasPlan);
+            clearPlanButton.setVisible(hasPlan);
             revalidate();
             repaint();
-        });
-    }
-
-    public void setHeartbeatText(String text) {
-        SwingUtilities.invokeLater(() -> {
-            if (text == null || text.isEmpty()) {
-                heartbeatLabel.setText(" ");
-            } else {
-                // Width-hinted HTML so JLabel word-wraps inside the ~210px
-                // side panel instead of clipping. Same pattern as the
-                // review banner above.
-                String safe = escapeHtml(text).replace("\n", "<br>");
-                heartbeatLabel.setText("<html><div style='width:195px'>" + safe + "</div></html>");
-            }
-            heartbeatLabel.revalidate();
         });
     }
 
@@ -361,8 +390,16 @@ public class GoalsPanel extends JPanel {
         this.onPlanGoals = callback;
     }
 
+    public void setOnClearGoals(Runnable callback) {
+        this.onClearGoals = callback;
+    }
+
     public void setOnSaveGoalsAsBuild(Runnable callback) {
         this.onSaveGoalsAsBuild = callback;
+    }
+
+    public void setOnClearPlan(Runnable callback) {
+        this.onClearPlan = callback;
     }
 
     /**
@@ -375,20 +412,22 @@ public class GoalsPanel extends JPanel {
                 goalQueuePanel.setVisible(false);
                 return;
             }
-            String label;
+            String plain;
             if (names == null || names.isEmpty()) {
-                label = count + " goal" + (count == 1 ? "" : "s") + " staged";
+                plain = count + " goal" + (count == 1 ? "" : "s") + " staged";
             } else {
                 int show = Math.min(names.size(), 3);
                 StringBuilder sb = new StringBuilder();
                 for (int i = 0; i < show; i++) {
                     if (sb.length() > 0) sb.append(", ");
-                    sb.append(names.get(i));
+                    sb.append(escapeHtml(names.get(i)));
                 }
                 if (names.size() > show) sb.append(" +").append(names.size() - show).append(" more");
-                label = sb.toString();
+                plain = sb.toString();
             }
-            goalQueueLabel.setText(label);
+            // HTML with explicit width so long goal names wrap instead of
+            // stretching the panel beyond the ~210px plugin panel width.
+            goalQueueLabel.setText("<html><body style='color:#82D282'>" + plain + "</body></html>");
             planGoalsButton.setText("Plan " + count + " goal" + (count == 1 ? "" : "s"));
             goalQueuePanel.setVisible(true);
             goalQueuePanel.revalidate();

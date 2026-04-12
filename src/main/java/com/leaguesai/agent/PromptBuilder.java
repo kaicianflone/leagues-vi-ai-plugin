@@ -28,32 +28,53 @@ public class PromptBuilder {
     }
 
     /**
-     * Two-arg overload kept for existing tests. Delegates to the three-arg
-     * form with no repo (so relic/area/pact sections are omitted).
+     * Two-arg overload kept for existing tests. Delegates to three-arg.
      */
     public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks) {
         return buildSystemPrompt(ctx, relevantTasks, null);
     }
 
     /**
-     * Builds a Markdown system prompt summarising the player's current state,
-     * optionally including a list of relevant tasks retrieved from semantic
-     * search (RAG context) and unlockables reference data (relics / areas /
-     * pacts) from the repo.
-     *
-     * <p>When {@code repo} is non-null and has relics / areas / pacts loaded,
-     * the prompt includes a condensed reference block for each category plus
-     * a sentence explaining the 40-pact / 3-respec Demonic Pacts mechanic.
-     * This is what lets the LLM answer questions like "what do I need to
-     * unlock Grimoire?" with real costs instead of guesses.
+     * Three-arg overload — all personas active, no gear block (backward compat).
      */
     public static String buildSystemPrompt(PlayerContext ctx,
                                            List<Task> relevantTasks,
                                            TaskRepository repo) {
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, null, null);
+    }
+
+    /**
+     * Full system prompt with gear context block appended, all personas active.
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
+                                           TaskRepository repo, List<GearItem> relevantGear) {
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, null);
+    }
+
+    /**
+     * Full system prompt with both gear context and persona filtering.
+     *
+     * @param selectedPersonas persona IDs to include; null = all personas
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
+                                           TaskRepository repo, List<GearItem> relevantGear,
+                                           java.util.List<String> selectedPersonas) {
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, selectedPersonas);
+    }
+
+    /**
+     * Master implementation. All public overloads delegate here.
+     */
+    private static String buildSystemPromptImpl(PlayerContext ctx,
+                                                List<Task> relevantTasks,
+                                                TaskRepository repo,
+                                                List<GearItem> relevantGear,
+                                                java.util.List<String> selectedPersonas) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
 
-        sb.append(buildIronmanDoctrine());
+        sb.append(buildIronmanDoctrine(selectedPersonas));
+        sb.append(buildEchoBossesSection());
 
         sb.append("## How To Help The Player\n");
         sb.append("1. **Read what you already know.** The Player State, Skills, Inventory, ");
@@ -177,18 +198,12 @@ public class PromptBuilder {
             }
         }
 
-        return sb.toString();
-    }
+        // Gear context block — only when gear items are provided
+        if (relevantGear != null && !relevantGear.isEmpty()) {
+            sb.append(buildGearContext(relevantGear, ctx));
+        }
 
-    /**
-     * Full system prompt with gear context block appended.
-     * Use when a build is active or the player asked a gear question.
-     */
-    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
-                                           TaskRepository repo, List<GearItem> relevantGear) {
-        String base = buildSystemPrompt(ctx, relevantTasks, repo);
-        String gearBlock = buildGearContext(relevantGear, ctx);
-        return base + gearBlock;
+        return sb.toString();
     }
 
     /**
@@ -364,31 +379,134 @@ public class PromptBuilder {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Personas
+    // -------------------------------------------------------------------------
+
     /**
-     * The Ironman Coaching Doctrine — embedded near the top of every system
-     * prompt so the LLM coaches in the style of B0aty / Faux / top UIM players.
-     * Pure prompt engineering: no external knowledge files, no scraping.
-     * Cheap to iterate when player feedback comes in.
+     * Returns the coaching doctrine block filtered to {@code selectedPersonas}.
+     * Pass {@code null} or an empty list to include all personas (backward compat).
+     */
+    public static String buildIronmanDoctrine(java.util.List<String> selectedPersonas) {
+        boolean all = selectedPersonas == null || selectedPersonas.isEmpty();
+        java.util.Set<String> active = all ? null : new java.util.HashSet<>(selectedPersonas);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Coaching Personas\n");
+        sb.append("You are coaching an OSRS Leagues VI (Demonic Pacts) player. ");
+        sb.append("The following expert voices are active — apply each one's lens when relevant.\n\n");
+
+        if (all || active.contains("points_chaser")) {
+            sb.append("**The Points Chaser** — treats every minute as a pts/hr calculation. ");
+            sb.append("Always name the points per task and tasks-per-hour at the player's level. ");
+            sb.append("Pushes parallel completion: if two tasks share a location, name them together. ");
+            sb.append("Flags low-value time sinks and surfaces the highest-pts tasks the player can realistically do next.\n\n");
+        }
+
+        if (all || active.contains("build_architect")) {
+            sb.append("**Build Architect** — filters every recommendation through relic and pact synergy. ");
+            sb.append("Before suggesting a task, asks 'does this serve the build?' Names which relics are boosted ");
+            sb.append("by the activity and which pacts apply. Tracks BiS gear milestones for the player's combat ");
+            sb.append("style and routes tasks toward those drops. Never recommends a detour that doesn't serve the active build.\n\n");
+        }
+
+        if (all || active.contains("explorer")) {
+            sb.append("**The Explorer** — expert in Varlamore and area unlock strategy. ");
+            sb.append("Treats Varlamore as home base — knows all Varlamore tasks and recommends exhausting ");
+            sb.append("high-value ones before branching. Reasons about which 3 extra areas give the best ");
+            sb.append("task density + echo boss + relic synergy for the player's build. Groups tasks by map ");
+            sb.append("region to eliminate travel. When tasks overlap multiple areas, names the optimal unlock order.\n\n");
+        }
+
+        if (all || active.contains("sprinter")) {
+            sb.append("**The Sprinter** — the league ends. Every suggestion comes with a pace check: ");
+            sb.append("'at this rate, do you have time to hit X league points before the deadline?' ");
+            sb.append("Deprioritises long grinds with small payoffs. Recommends skipping low-point tasks ");
+            sb.append("when higher-value opportunities are available. Calls out honestly if the player is falling behind.\n\n");
+        }
+
+        if (all || active.contains("theorist")) {
+            sb.append("**The Theorist** — numbers drive every decision. Names the exact DPS increase from ");
+            sb.append("a relic, the XP multiplier from a pact, the break-even point for a gear grind. ");
+            sb.append("When two approaches seem equivalent, works out which is strictly better and by how much. ");
+            sb.append("If a tradeoff is genuinely close, says so and lists the deciding variable.\n\n");
+        }
+
+        if (all || active.contains("settled")) {
+            sb.append("**Settled (patient grinder)** — methodical and thorough. Never recommends skipping ");
+            sb.append("prerequisite chains. Always asks 'what does the player need before they can do this?' ");
+            sb.append("Prefers systematic progression. Explicitly states when a suggested step has prerequisites ");
+            sb.append("the player hasn't met and gives the fastest path to meeting them.\n\n");
+        }
+
+        if (all || active.contains("sirpugger")) {
+            sb.append("**SirPugger (leagues meta expert)** — deep Leagues VI meta knowledge. Knows which tasks ");
+            sb.append("are commonly skipped by top players and why, which echo bosses are highest priority, ");
+            sb.append("and how the pact tree shapes the optimal task route. Corrects common misconceptions. ");
+            sb.append("When suggesting echo boss content, always names the echo orb requirement and prep route.\n\n");
+        }
+
+        if (all || active.contains("pragmatist")) {
+            sb.append("**The Pragmatist** — anchors every suggestion to what the player can do RIGHT NOW ");
+            sb.append("given their current levels, gear, and unlocked areas (read the Player State sections above). ");
+            sb.append("Never suggests content requiring skills or areas the player doesn't have. When the ideal ");
+            sb.append("path is blocked, immediately names the best available alternative and the shortest path to readiness.\n\n");
+        }
+
+        if (all || active.contains("skill_spec")) {
+            sb.append("**Skill Spec (number-cruncher)** — treats every skill level as a resource. When the player ");
+            sb.append("needs a level for a task, names the fastest ironman method to get there and the XP required. ");
+            sb.append("Optimizes skilling routes to double up on league tasks. Tracks skill milestones that unlock ");
+            sb.append("new task categories and flags when leveling a skill opens a cluster of high-value tasks.\n\n");
+        }
+
+        sb.append("**Cross-persona rules (always apply):**\n");
+        sb.append("- NEVER say 'buy X' or 'trade for X' — ironman-only sources only.\n");
+        sb.append("- When you mention an item, state where an ironman gets it in one phrase.\n");
+        sb.append("- For combat tasks, state the recommended gear tier the player actually owns (check Equipment above).\n");
+        sb.append("- Best available method, not popular method — if the meta route requires content the player ");
+        sb.append("hasn't unlocked, fall back to the best available and say why.\n\n");
+
+        return sb.toString();
+    }
+
+    /**
+     * Leagues VI Echo Boss reference — embedded in every system prompt so the
+     * LLM knows which echo variant drops which unique item, the drop rates, and
+     * the echo orb access mechanic. Each region has exactly one echo boss.
+     *
+     * <p>Key mechanic: obtain the echo orb from the NORMAL boss variant (it is
+     * an additional drop on the regular drop table), then carry it in your
+     * inventory to access the echo variant in that same region.
+     */
+    static String buildEchoBossesSection() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Echo Bosses & Echo Equipment (Leagues VI)\n");
+        sb.append("Each region has one echo boss variant. To access it, you must first obtain ");
+        sb.append("that region's **echo orb** as an additional drop from the normal boss, ");
+        sb.append("then carry the orb in your inventory when entering the boss area. ");
+        sb.append("Echo orbs are region-locked — Cerberus's orb only works for Cerberus (Echo), etc.\n\n");
+        sb.append("| Region | Echo Boss | Unique Drop | Rate | Key Effect |\n");
+        sb.append("|---|---|---|---|---|\n");
+        sb.append("| Varlamore | Amoxliatl (Echo) | Infernal tecpatl | 1/30 | 2H melee weapon; 10% demonbane; SA hits 4x at 25% dmg boost |\n");
+        sb.append("| Asgarnia | Cerberus (Echo) | Fang of the hound | 1/25 | Dagger; 5% proc Flames of Cerberus; SA guarantees proc |\n");
+        sb.append("| Kandarin | Thermonuclear smoke devil (Echo) | Devil's element + Shadowflame quadrant | 1/25 each | Shield: +30% elemental weakness all elements; Staff: fires 2nd spell at 40% dmg, all spellbooks, infinite elemental runes |\n");
+        sb.append("| Kourend | Hespori (Echo) | Nature's recurve | 1/15 | Bow; on hit 50% chance restore 10% HP and prayer from dmg dealt |\n");
+        sb.append("| Fremennik | Dagannoth Kings (Echo) | V's helm | 1/25 | Helm; 5% reduce incoming hit to 0; next SA free within 60s; counts as imbued slayer helm |\n");
+        sb.append("| Wilderness | King Black Dragon (Echo) | King's barrage | 1/25 | Crossbow; always shoots 2 bolts; 2nd bolt is ice attack (freeze 24 ticks); toggleable |\n");
+        sb.append("| Morytania | Grotesque Guardians (Echo) | Lithic sceptre | 1/25 | Stacks 14 shatter charges/hit; SA consumes for burst damage; charged with earth+body runes |\n");
+        sb.append("| Desert | Kalphite Queen (Echo) | Drygore blowpipe | 1/20 | Same stats as blowpipe; +25% chance to burn on hit |\n");
+        sb.append("| Tirannwn | Corrupted Hunllef (Echo) | Crystal blessing | 1/15 | Increases dmg and accuracy for all combat styles; bonus synergy with crystal armour pieces |\n");
+        sb.append("\n**When the player asks about echo items or echo bosses, use this table — do NOT guess drop rates or effects.**\n\n");
+        return sb.toString();
+    }
+
+    /**
+     * No-arg form — includes all personas. Used by tests and overloads that
+     * don't have access to user preferences.
      */
     static String buildIronmanDoctrine() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("## Ironman Coaching Doctrine\n");
-        sb.append("You are coaching an Ironman in Leagues VI. Your style is shaped by these influences:\n");
-        sb.append("- B0aty (HCIM): survivability first. Never recommend a step that risks death without a hard warning. ");
-        sb.append("Prefer safer alternatives even at small XP/hour cost. Always name the safer alt.\n");
-        sb.append("- Faux (efficient skiller): rates matter. When recommending training, name the GP/xp/hr and the bottleneck resource. ");
-        sb.append("Prefer methods that double up on a Leagues task.\n");
-        sb.append("- Top UIM (no-bank logistics): inventory is sacred. Group tasks geographically. Never recommend a return trip ");
-        sb.append("when one tile-walk away there is a second task. Carry only what is needed for the next 3 tasks.\n");
-        sb.append("- All three: ironman-only sources. NEVER suggest a GE/trade/group-ironman fix.\n");
-        sb.append("- Best methods, not popular methods. If the wiki \"fastest\" route requires content the player has not unlocked, ");
-        sb.append("fall back to the best available and explicitly say why.\n\n");
-        sb.append("Behavioral rules:\n");
-        sb.append("- When you mention an item, also state where an ironman gets it, in one phrase.\n");
-        sb.append("- For makeable items, walk back the prereq chain to a gatherable.\n");
-        sb.append("- For combat tasks, always state the recommended gear tier the player actually owns (read Equipment + Inventory above).\n");
-        sb.append("- Never say \"buy X\" or \"trade for X\".\n\n");
-        return sb.toString();
+        return buildIronmanDoctrine(null);
     }
 
     /**
@@ -422,23 +540,69 @@ public class PromptBuilder {
         return sb.toString();
     }
 
+    // Persona display names + review focus for persona review prompt
+    private static final String[][] PERSONA_REVIEW_DEFS = {
+            {"points_chaser",  "Points Chaser",   "obsesses over pts/hr, task density, and parallel completion opportunities"},
+            {"build_architect","Build Architect",  "obsesses over relic/pact synergy and whether each task serves the chosen build"},
+            {"explorer",       "The Explorer",     "obsesses over area unlock timing, Varlamore task density, and geographic batching"},
+            {"sprinter",       "The Sprinter",     "obsesses over pace — is this plan completable in the league window?"},
+            {"theorist",       "The Theorist",     "obsesses over exact math: DPS gain, XP efficiency, and synergy numbers"},
+            {"settled",        "Settled",          "obsesses over prerequisite completeness — no skipped steps"},
+            {"sirpugger",      "SirPugger",        "obsesses over Leagues VI meta: echo boss priority, pact tree routing"},
+            {"pragmatist",     "The Pragmatist",   "obsesses over whether the plan is achievable with the player's current stats and unlocks"},
+            {"skill_spec",     "Skill Spec",       "obsesses over XP/hr bottlenecks and skill milestones unlocking new task clusters"},
+    };
+
     /**
-     * Prompt for {@link PersonaReviewer}. Asks the LLM to roleplay three
-     * ironman archetypes adversarially reviewing the just-built plan.
+     * Prompt for {@link PersonaReviewer}. Uses the active personas from
+     * {@code selectedPersonas} (null = all). Each persona critiques the plan
+     * from its lens. Optional {@code priorCritique} lets personas acknowledge
+     * prior feedback on re-review rounds.
      */
-    public static String buildPersonaReviewPrompt(String goal, List<PlannedStep> plan) {
+    public static String buildPersonaReviewPrompt(String goal, List<PlannedStep> plan,
+                                                   java.util.List<String> selectedPersonas,
+                                                   String priorCritique) {
+        java.util.Set<String> active = selectedPersonas == null || selectedPersonas.isEmpty()
+                ? null : new java.util.HashSet<>(selectedPersonas);
+
+        // Collect which personas are active
+        java.util.List<String[]> active_defs = new java.util.ArrayList<>();
+        for (String[] def : PERSONA_REVIEW_DEFS) {
+            if (active == null || active.contains(def[0])) {
+                active_defs.add(def);
+            }
+        }
+        if (active_defs.isEmpty()) {
+            // Fallback: always include at least points_chaser + pragmatist
+            for (String[] def : PERSONA_REVIEW_DEFS) {
+                if (def[0].equals("points_chaser") || def[0].equals("pragmatist")) {
+                    active_defs.add(def);
+                }
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
-        sb.append("You are simultaneously THREE ironman experts adversarially reviewing the Leagues VI plan below.\n\n");
-        sb.append("- B0aty (Hardcore Ironman): obsesses over route safety, death risk, and survivability.\n");
-        sb.append("- Faux (efficient skiller): obsesses over xp/hr, gp/hr, and bottleneck resources.\n");
-        sb.append("- Top UIM (no-bank logistics): obsesses over inventory pressure and route adjacency.\n\n");
-        sb.append("Each picks the SINGLE biggest issue with this plan from their lens, in one sentence. ");
-        sb.append("Then output a verdict line: \"Verdict: keep\" / \"Verdict: revise\" / \"Verdict: rebuild\".\n\n");
-        sb.append("Output format (exact):\n");
-        sb.append("B0aty: <one sentence>\n");
-        sb.append("Faux: <one sentence>\n");
-        sb.append("UIM: <one sentence>\n");
+        sb.append("You are ").append(active_defs.size())
+          .append(" OSRS Leagues VI coaching experts adversarially reviewing the plan below.\n\n");
+
+        for (String[] def : active_defs) {
+            sb.append("- **").append(def[1]).append("**: ").append(def[2]).append("\n");
+        }
+        sb.append("\nEach expert picks the SINGLE biggest issue with this plan from their lens, in one sentence. ");
+        sb.append("Then output a verdict: \"Verdict: keep\" (plan is solid), \"Verdict: revise\" (minor fixes), ");
+        sb.append("or \"Verdict: rebuild\" (fundamental problems require a new approach).\n\n");
+
+        if (priorCritique != null && !priorCritique.isEmpty()) {
+            sb.append("**Prior review round feedback (acknowledge if addressed):**\n");
+            sb.append(priorCritique).append("\n\n");
+        }
+
+        sb.append("Output format (exact — one line per expert, then Verdict):\n");
+        for (String[] def : active_defs) {
+            sb.append(def[1]).append(": <one sentence>\n");
+        }
         sb.append("Verdict: <keep|revise|rebuild>\n\n");
+
         sb.append("Goal: ").append(goal == null ? "(none)" : goal).append("\n\n");
         sb.append("Plan:\n");
         if (plan != null) {
@@ -456,6 +620,40 @@ public class PromptBuilder {
                 sb.append("(+ ").append(plan.size() - limit).append(" more tasks)\n");
             }
         }
+        return sb.toString();
+    }
+
+    /** Backward-compat overload — all personas, no prior critique. */
+    public static String buildPersonaReviewPrompt(String goal, List<PlannedStep> plan) {
+        return buildPersonaReviewPrompt(goal, plan, null, null);
+    }
+
+    /**
+     * Prompt for plan refinement: asks the LLM to reorder the existing task
+     * list in response to persona critiques. Returns a JSON array of task IDs
+     * in the revised recommended order.
+     */
+    public static String buildPlanRefinementPrompt(String goal, List<PlannedStep> plan,
+                                                    String personaCritique) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("The persona reviewers have critiqued the Leagues VI plan below and requested a rebuild.\n\n");
+        sb.append("**Their critique:**\n").append(personaCritique).append("\n\n");
+        sb.append("**Goal:** ").append(goal == null ? "(none)" : goal).append("\n\n");
+        sb.append("**Current task order:**\n");
+        if (plan != null) {
+            int limit = Math.min(plan.size(), 30);
+            for (int i = 0; i < limit; i++) {
+                PlannedStep s = plan.get(i);
+                String id = s.getTask() != null ? s.getTask().getId() : "?";
+                String instr = s.getInstruction() != null ? s.getInstruction() : "(step)";
+                String area = (s.getTask() != null && s.getTask().getArea() != null)
+                        ? " [" + s.getTask().getArea() + "]" : "";
+                sb.append("- id:\"").append(id).append("\" — ").append(instr).append(area).append("\n");
+            }
+        }
+        sb.append("\nRe-sequence these tasks to address the critique. Respond with ONLY a JSON array ");
+        sb.append("of task ID strings in the new recommended order, e.g. [\"id1\",\"id2\"]. ");
+        sb.append("Do not add or remove tasks — only reorder them.\n");
         return sb.toString();
     }
 
