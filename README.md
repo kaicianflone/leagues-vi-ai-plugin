@@ -23,7 +23,31 @@ A RuneLite plugin that acts as an AI-powered coach for Old School RuneScape's **
 
 ## Installation
 
-### Prerequisites
+### Recommended: install via Codex
+
+The easiest way to get set up is to let Codex handle it. Codex is a free AI coding agent from OpenAI that can clone the repo, install dependencies, run the scraper, and launch RuneLite — all from a single prompt.
+
+**Step 1.** Download and install Codex:
+```bash
+npm install -g @openai/codex
+```
+Then run `codex login` and sign in with your ChatGPT Plus account. (This also sets up the ChatGPT OAuth the plugin uses for its AI coach — two birds, one stone.)
+
+**Step 2.** Open a terminal, paste this prompt into Codex, and hit enter:
+
+```
+Clone https://github.com/kaicianflone/leagues-vi-ai-plugin.git, then set JAVA_HOME to the Java 11 JDK (install it via Homebrew if missing: brew install openjdk@11), run ./scraper/scrape.sh to populate the task database, and finally launch RuneLite with the plugin loaded by running ./gradlew runPlugin. Tell me when RuneLite is open and what I should do next.
+```
+
+Codex will walk you through the whole thing. When RuneLite opens, look for the devil emoji icon in the side panel — that's the plugin.
+
+---
+
+### Manual install (advanced)
+
+If you prefer to do it yourself:
+
+#### Prerequisites
 
 - **Java 11.** `JAVA_HOME` must point at a JDK 11 install. On macOS with Homebrew:
   ```bash
@@ -31,7 +55,7 @@ A RuneLite plugin that acts as an AI-powered coach for Old School RuneScape's **
   ```
 - **Git** and a working RuneLite install (the plugin launches its own embedded RuneLite client in dev mode, so you don't need to touch your main RuneLite installation).
 
-### Build and run
+#### Build and run
 
 ```bash
 git clone https://github.com/kaicianflone/leagues-vi-ai-plugin.git
