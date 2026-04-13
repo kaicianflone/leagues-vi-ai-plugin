@@ -26,6 +26,10 @@ public class NpcHighlightOverlay extends Overlay {
     @Getter
     private List<Integer> targetNpcIds;
 
+    /** Optional: NPC display names to match when game IDs are unavailable. */
+    @Getter
+    private List<String> targetNpcNames;
+
     @Inject
     public NpcHighlightOverlay(Client client, LeaguesAiConfig config) {
         this.client = client;
@@ -38,13 +42,20 @@ public class NpcHighlightOverlay extends Overlay {
         this.targetNpcIds = ids;
     }
 
+    public void setTargetNpcNames(List<String> names) {
+        this.targetNpcNames = names;
+    }
+
     public void clear() {
         this.targetNpcIds = null;
+        this.targetNpcNames = null;
     }
 
     @Override
     public Dimension render(Graphics2D graphics) {
-        if (targetNpcIds == null || targetNpcIds.isEmpty()) {
+        boolean hasIds = targetNpcIds != null && !targetNpcIds.isEmpty();
+        boolean hasNames = targetNpcNames != null && !targetNpcNames.isEmpty();
+        if (!hasIds && !hasNames) {
             return null;
         }
         List<NPC> npcs = client.getNpcs();
@@ -52,13 +63,25 @@ public class NpcHighlightOverlay extends Overlay {
             return null;
         }
         for (NPC npc : npcs) {
-            if (npc == null || !targetNpcIds.contains(npc.getId())) {
-                continue;
+            if (npc == null) continue;
+            boolean matches = false;
+            if (hasIds && targetNpcIds.contains(npc.getId())) {
+                matches = true;
             }
+            if (!matches && hasNames) {
+                String npcName = npc.getName();
+                if (npcName != null) {
+                    for (String name : targetNpcNames) {
+                        if (npcName.equalsIgnoreCase(name)) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!matches) continue;
             Shape hull = npc.getConvexHull();
-            if (hull == null) {
-                continue;
-            }
+            if (hull == null) continue;
             OverlayUtil.renderPolygon(graphics, hull, config.overlayColor());
         }
         return null;

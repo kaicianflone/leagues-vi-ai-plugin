@@ -1,5 +1,6 @@
 package com.leaguesai.scraper;
 
+import okhttp3.OkHttpClient;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
@@ -31,14 +32,28 @@ public class WikiScraper {
 
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.err.println("Usage: WikiScraper <output-db-path> [openai-api-key]");
-            System.err.println("  If no API key is provided, embeddings will be skipped");
-            System.err.println("  (vector search disabled, but tasks/areas/relics still load).");
+            System.err.println("Usage: WikiScraper <output-db-path> [openai-api-key] [--skip-tasks]");
+            System.err.println("  --skip-tasks  Skip Demonic Pacts League task pages (use pre-launch).");
+            System.err.println("  If no API key is provided, embeddings will be skipped.");
             System.exit(1);
         }
 
-        String dbPath = args[0];
-        String apiKey = args.length >= 2 ? args[1] : null;
+        String dbPath = null;
+        String apiKey = null;
+        boolean skipTasks = false;
+        for (String arg : args) {
+            if ("--skip-tasks".equals(arg)) {
+                skipTasks = true;
+            } else if (dbPath == null) {
+                dbPath = arg;
+            } else {
+                apiKey = arg;
+            }
+        }
+        if (dbPath == null) {
+            System.err.println("Usage: WikiScraper <output-db-path> [openai-api-key] [--skip-tasks]");
+            System.exit(1);
+        }
 
         File dbFile = new File(dbPath);
         File parent = dbFile.getParentFile();
@@ -48,7 +63,7 @@ public class WikiScraper {
 
         SqliteWriter writer = new SqliteWriter(dbFile);
         TaskItemExtractor taskItemExtractor = new TaskItemExtractor();
-        // TODO: run ItemStatsScraper separately via 'scrape-items' Gradle task
+        OkHttpClient httpClient = new OkHttpClient();
         EmbeddingGenerator embedder = (apiKey != null && !apiKey.isEmpty())
                 ? new EmbeddingGenerator(apiKey)
                 : null;
@@ -67,7 +82,11 @@ public class WikiScraper {
         int totalTasks = 0;
         int totalErrors = 0;
 
-        for (String pagePath : TASK_PAGES) {
+        if (skipTasks) {
+            System.out.println("Task scraping SKIPPED (--skip-tasks flag).");
+        }
+
+        for (String pagePath : skipTasks ? new String[0] : TASK_PAGES) {
             String url  = WIKI_BASE + pagePath;
             String area = deriveAreaName(pagePath);
             System.out.println("\nScraping: " + url);
@@ -174,9 +193,56 @@ public class WikiScraper {
             totalErrors++;
         }
 
+        // Scrape equipment stats from OSRS Wiki (Category:Equipment) → items table
+        System.out.println("\nScraping equipment stats from OSRS Wiki...");
+        int totalItems = 0;
+        try {
+            ItemStatsScraper itemStatsScraper = new ItemStatsScraper(httpClient);
+            List<ItemStatsScraper.ItemStatsRow> itemRows = itemStatsScraper.fetchAll();
+            System.out.println("  Fetched " + itemRows.size() + " equipment rows from wiki");
+            for (ItemStatsScraper.ItemStatsRow row : itemRows) {
+                if (row.pageName == null || row.pageName.isEmpty()) continue;
+                // Slug the page name to a stable id (lowercase, spaces→underscores, strip specials)
+                String id = row.pageName.toLowerCase()
+                        .replaceAll("[^a-z0-9]+", "_")
+                        .replaceAll("^_|_$", "");
+                String wikiUrl = "https://oldschool.runescape.wiki/w/" +
+                        row.pageName.replace(" ", "_");
+                // Normalize wiki slot name to GearSlot enum name
+                String slot = normalizeSlot(row.slot);
+                try {
+                    writer.upsertItem(
+                            id,
+                            0,              // wikiItemId — not in Infobox Bonuses
+                            row.pageName,
+                            slot,
+                            null,           // region — not per-item in wiki
+                            row.attackStab, row.attackSlash, row.attackCrush,
+                            row.attackMagic, row.attackRanged,
+                            row.defenceStab, row.defenceSlash, row.defenceCrush,
+                            row.defenceMagic, row.defenceRanged,
+                            row.meleeStrength, row.magicDamage,
+                            row.rangedStrength, row.prayerBonus,
+                            row.weight,
+                            null,           // skill_requirements — parsed separately
+                            wikiUrl,
+                            null            // embedding — not needed for gear lookup
+                    );
+                    totalItems++;
+                } catch (SQLException e) {
+                    System.err.println("  ERROR writing item '" + row.pageName + "': " + e.getMessage());
+                    totalErrors++;
+                }
+            }
+            System.out.println("  Equipment items written: " + totalItems);
+        } catch (IOException e) {
+            System.err.println("Equipment stats scrape failed: " + e.getMessage());
+            totalErrors++;
+        }
+
         writer.close();
 
-        System.out.println("\nDone. Tasks written: " + totalTasks + "  Errors: " + totalErrors);
+        System.out.println("\nDone. Tasks: " + totalTasks + "  Items: " + totalItems + "  Errors: " + totalErrors);
         System.out.println("Database: " + dbFile.getAbsolutePath());
     }
 
@@ -205,6 +271,30 @@ public class WikiScraper {
 
     private static String escapeJson(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * Maps an OSRS wiki {{Infobox Bonuses}} slot value to the GearSlot enum name
+     * stored in the SQLite items table. Returns null for unmapped values so
+     * GearRepository skips them gracefully.
+     */
+    private static String normalizeSlot(String wikiSlot) {
+        if (wikiSlot == null) return null;
+        switch (wikiSlot.toLowerCase()) {
+            case "head":    return "HEAD";
+            case "cape":    return "CAPE";
+            case "neck":    return "AMULET";
+            case "weapon":  return "WEAPON";
+            case "2h":      return "WEAPON";
+            case "shield":  return "SHIELD";
+            case "body":    return "BODY";
+            case "legs":    return "LEGS";
+            case "hands":   return "HANDS";
+            case "feet":    return "FEET";
+            case "ring":    return "RING";
+            case "ammo":    return "AMMO";
+            default:        return null; // unrecognised slot — skip
+        }
     }
 
     /** Extracts the area name from the last path segment, replacing underscores. */

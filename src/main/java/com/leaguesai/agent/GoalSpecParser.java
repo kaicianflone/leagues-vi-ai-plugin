@@ -66,6 +66,31 @@ public final class GoalSpecParser {
      * Returns {@code FREEFORM} when no shape matches.
      */
     public static GoalSpec parse(String phrase, TaskRepository repo, ItemDependencyGraph itemGraph) {
+        return parse(phrase, repo, itemGraph, true);
+    }
+
+    /**
+     * Full overload with leagues mode gating. When {@code leaguesMode} is {@code false},
+     * RELIC/PACT/AREA shapes short-circuit to FREEFORM so the ironman planner doesn't
+     * attempt leagues-only goal resolution.
+     */
+    public static GoalSpec parse(String phrase, TaskRepository repo, ItemDependencyGraph itemGraph,
+                                 boolean leaguesMode) {
+        if (phrase == null || phrase.trim().isEmpty()) {
+            return freeform(phrase);
+        }
+        if (!leaguesMode) {
+            String lower = phrase.trim().toLowerCase();
+            // Short-circuit leagues-only shapes in ironman mode
+            if (lower.contains("relic") || lower.contains("pact")
+                    || lower.matches("^\\s*plan\\s+unlock\\s+.*")) {
+                return freeform(phrase);
+            }
+        }
+        return parseInternal(phrase, repo, itemGraph);
+    }
+
+    private static GoalSpec parseInternal(String phrase, TaskRepository repo, ItemDependencyGraph itemGraph) {
         if (phrase == null || phrase.trim().isEmpty()) {
             return freeform(phrase);
         }
@@ -215,15 +240,16 @@ public final class GoalSpecParser {
             }
         }
 
-        // Item: "I need barrows gloves" / "how do I get dragon scimitar" / "get rune platebody"
-        // Guard: require "get", "need", "make", "craft", "smith", "fletch", "brew", "cook"
-        // and the itemGraph must have data. Fuzzy name match against graph content.
+        // Item/Craft: "I need barrows gloves" / "make a staff of air" / "smith rune platebody"
+        // Guard: require a known acquisition/crafting keyword and a known item name.
         if (itemGraph != null && !itemGraph.isEmpty()) {
             String lowerPhrase = trimmed.toLowerCase();
-            boolean hasItemKeyword = lowerPhrase.contains("get ") || lowerPhrase.contains("need ")
-                    || lowerPhrase.contains("make ") || lowerPhrase.contains("craft ")
+            // Crafting verbs imply the player wants to MAKE the item, not buy it.
+            boolean isCraftIntent = lowerPhrase.contains("make ") || lowerPhrase.contains("craft ")
                     || lowerPhrase.contains("smith ") || lowerPhrase.contains("fletch ")
-                    || lowerPhrase.contains("brew ") || lowerPhrase.contains("cook ")
+                    || lowerPhrase.contains("brew ") || lowerPhrase.contains("cook ");
+            boolean hasItemKeyword = isCraftIntent
+                    || lowerPhrase.contains("get ") || lowerPhrase.contains("need ")
                     || lowerPhrase.contains("want ") || lowerPhrase.contains("farm ")
                     || lowerPhrase.contains("obtain ") || lowerPhrase.contains("i need")
                     || lowerPhrase.contains("i want") || lowerPhrase.startsWith("get ")
@@ -234,8 +260,11 @@ public final class GoalSpecParser {
                 com.leaguesai.data.model.ItemDependency found =
                         itemGraph.findLongestMatchingItem(lowerPhrase);
                 if (found != null) {
+                    // Emit CRAFT when crafting verbs are present — GoalPlanner will
+                    // do a wiki recipe lookup and build material + craft steps.
+                    GoalType goalType = isCraftIntent ? GoalType.CRAFT : GoalType.ITEM;
                     return GoalSpec.builder()
-                            .type(GoalType.ITEM)
+                            .type(goalType)
                             .targetId(found.getItemId())
                             .targetName(found.getItemName())
                             .rawPhrase(phrase)

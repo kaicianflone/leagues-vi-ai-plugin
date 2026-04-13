@@ -48,6 +48,7 @@ public class LeaguesAiPlugin extends Plugin {
 
     @Inject private Client client;
     @Inject private LeaguesAiConfig config;
+    @Inject private ConfigManager configManager;
     @Inject private ClientToolbar clientToolbar;
     @Inject private OverlayManager overlayManager;
     @Inject private EventBus eventBus;
@@ -71,6 +72,7 @@ public class LeaguesAiPlugin extends Plugin {
 
     // Constructed in loadDatabaseAsync() once TaskRepositoryImpl exists.
     private volatile GoalPlanner goalPlanner;
+    private volatile com.leaguesai.agent.WikiItemLookup wikiItemLookup;
 
     private volatile DatabaseSeeder databaseSeeder;
 
@@ -93,6 +95,19 @@ public class LeaguesAiPlugin extends Plugin {
     private volatile ChatHistoryStore chatHistoryStore;
     private volatile ItemDependencyGraph itemDependencyGraph;
     private volatile UserPreferences userPreferences;
+    private volatile UnlockablesPanel unlockablesPanel;
+
+    /**
+     * Active plan steps + current index for inventory-driven auto-advance.
+     * {@code activePlanSteps} is written from the llmExecutor thread (plan callback)
+     * and read from the game thread ({@code onInventoryStateEvent}). The index is
+     * written by the game thread only. Both are {@code volatile} for cross-thread
+     * visibility. The index is always written to 0 <em>before</em> {@code activePlanSteps}
+     * is set to the new list, so a concurrent game-thread read never sees a stale
+     * index from a previous plan paired with the new step list.
+     */
+    private volatile List<com.leaguesai.agent.PlannedStep> activePlanSteps = null;
+    private volatile int activePlanStepIndex = 0;
 
     /** Preferences file — model + persona selection persisted across sessions. */
     private static final File PREFS_FILE = new File(System.getProperty("user.home"),
@@ -199,6 +214,8 @@ public class LeaguesAiPlugin extends Plugin {
             itemDependencyGraph.loadFromDb();
             this.itemDependencyGraph = itemDependencyGraph;
             goalPlanner = new GoalPlanner(taskRepo, itemDependencyGraph);
+            wikiItemLookup = new com.leaguesai.agent.WikiItemLookup();
+            goalPlanner.setWikiItemLookup(wikiItemLookup);
 
             // Gear repository and build system
             File buildsFile = new File(System.getProperty("user.home"),
@@ -247,7 +264,7 @@ public class LeaguesAiPlugin extends Plugin {
             openAiClient = newClient;
             usingCodexOauth = codexMode;
             currentApiKey = apiKey != null ? apiKey : "";
-            chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+            chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner, config);
             chatService.setItemDependencyGraph(itemDependencyGraph);
             chatService.setProximityOptimizer(proximityOptimizer);
             chatService.setUserPreferences(prefs);
@@ -286,6 +303,8 @@ public class LeaguesAiPlugin extends Plugin {
                 if (gearRepository != null) unlock.setGearRepository(gearRepository);
                 unlock.setOnSetGoal(this::handleUnlockableGoalClick);
                 unlock.setOnSetGearGoal(item -> stageGearGoal(item));
+                unlock.setLeaguesMode(config.leaguesMode());
+                unlockablesPanel = unlock;
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
                 // Restore any goals queued in a prior session
                 refreshGoalQueueBar();
@@ -354,7 +373,7 @@ public class LeaguesAiPlugin extends Plugin {
                     LlmClient newClient = new CodexOauthClient(model);
                     openAiClient = newClient;
                     if (taskRepo != null && vectorIndex != null) {
-                        chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                        chatService = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner, config);
                         chatService.setItemDependencyGraph(this.itemDependencyGraph);
                         chatService.setProximityOptimizer(proximityOptimizer);
                         chatService.setHistoryStore(chatHistoryStore);
@@ -778,7 +797,13 @@ public class LeaguesAiPlugin extends Plugin {
             panel.setProgress(0, total);
         });
 
-        // Overlay controller: activate the first step so arrows/highlights appear in-game
+        // Store plan for auto-advance and activate first step.
+        // Write index BEFORE steps: onInventoryStateEvent reads both on the client thread.
+        // If steps were written first a concurrent inventory event could read the new
+        // steps with a stale (non-zero) index and skip straight to the wrong step.
+        activePlanStepIndex = 0;
+        activePlanSteps = steps;
+
         PlannedStep first = steps.get(0);
         if (first != null && overlayController != null) {
             SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first));
@@ -1071,7 +1096,7 @@ public class LeaguesAiPlugin extends Plugin {
                 String model = userPreferences != null ? userPreferences.getModel() : UserPreferences.DEFAULT_MODEL;
                 openAiClient = new OpenAiClient(safeKey, model);
                 if (taskRepo != null && vectorIndex != null) {
-                    chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    chatService = new ChatService(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner, config);
                     chatService.setItemDependencyGraph(this.itemDependencyGraph);
                     chatService.setProximityOptimizer(proximityOptimizer);
                     chatService.setHistoryStore(chatHistoryStore);
@@ -1119,7 +1144,7 @@ public class LeaguesAiPlugin extends Plugin {
                 if (svc != null) svc.setUserPreferences(userPreferences);
                 // Rebuild ChatService with new client
                 if (taskRepo != null && vectorIndex != null) {
-                    ChatService newSvc = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner);
+                    ChatService newSvc = new ChatService(newClient, contextAssembler, taskRepo, vectorIndex, goalPlanner, config);
                     newSvc.setItemDependencyGraph(itemDependencyGraph);
                     newSvc.setProximityOptimizer(proximityOptimizer);
                     newSvc.setHistoryStore(chatHistoryStore);
@@ -1223,6 +1248,7 @@ public class LeaguesAiPlugin extends Plugin {
 
         // Clear active plan + goal (separate from clearing staged goals queue)
         panel.getGoalsPanel().setOnClearPlan(() -> {
+            if (goalStore != null) goalStore.clearCurrentPlan();
             if (contextAssembler != null) {
                 contextAssembler.setCurrentGoal(null);
                 contextAssembler.setCurrentPlan(java.util.Collections.emptyList());
@@ -1235,12 +1261,82 @@ public class LeaguesAiPlugin extends Plugin {
             });
             overlayController.clearAll();
         });
+
+        // Leagues mode toggle
+        panel.getSettingsPanel().setOnLeaguesModeChanged(on -> {
+            configManager.setConfiguration("leaguesai", "leaguesMode", on);
+            if (!on) {
+                if (goalStore != null) goalStore.clearAllGoals();
+                overlayController.clearAll();
+            }
+            panel.setLeaguesMode(on);
+            UnlockablesPanel up = unlockablesPanel;
+            if (up != null) up.setLeaguesMode(on);
+            log.info("Leagues mode: {}", on ? "LEAGUES" : "IRONMAN");
+        });
+
+        // Initialize mode badge + unlockables visibility from config
+        boolean initialLeaguesMode = config.leaguesMode();
+        panel.setLeaguesMode(initialLeaguesMode);
+        panel.getSettingsPanel().setLeaguesMode(initialLeaguesMode);
     }
 
     @Subscribe
     public void onGameStateChanged(GameStateChanged event) {
         if (event.getGameState() == GameState.LOGGED_IN) {
             xpMonitor.initialize();
+        }
+    }
+
+    /**
+     * Auto-advance the active plan step when the player's inventory satisfies the
+     * current step's {@code completionItemIds}.
+     *
+     * <p>Only wiki-lookup steps (shop/bank) populate {@code completionItemIds}.
+     * Task-based steps (Leagues tasks) don't use this mechanism.
+     */
+    @Subscribe
+    public void onInventoryStateEvent(com.leaguesai.core.events.InventoryStateEvent event) {
+        List<com.leaguesai.agent.PlannedStep> plan = activePlanSteps;
+        if (plan == null || plan.isEmpty()) return;
+        int idx = activePlanStepIndex;
+        if (idx >= plan.size()) return;
+
+        com.leaguesai.agent.PlannedStep currentStep = plan.get(idx);
+        List<Integer> needed = currentStep.getCompletionItemIds();
+        if (needed == null || needed.isEmpty()) return;
+
+        java.util.Map<Integer, Integer> inv = event.getItems();
+        java.util.Map<Integer, Integer> minQtys = currentStep.getCompletionItemMinQtys();
+        boolean satisfied = needed.stream().anyMatch(id -> {
+            if (id == null) return false;
+            int held = inv.getOrDefault(id, 0);
+            int required = (minQtys != null) ? minQtys.getOrDefault(id, 1) : 1;
+            return held >= required;
+        });
+        if (!satisfied) return;
+
+        int nextIdx = idx + 1;
+        activePlanStepIndex = nextIdx;
+
+        if (nextIdx < plan.size()) {
+            com.leaguesai.agent.PlannedStep next = plan.get(nextIdx);
+            log.info("Plan auto-advance: step {} → step {} ('{}')",
+                    idx + 1, nextIdx + 1,
+                    next.getInstruction() != null ? next.getInstruction() : "(no instruction)");
+            SwingUtilities.invokeLater(() -> {
+                if (overlayController != null) overlayController.setActiveStep(next);
+                if (panel != null) panel.getGoalsPanel().setProgress(nextIdx, plan.size());
+                if (panel != null) panel.setProgress(nextIdx, plan.size());
+            });
+        } else {
+            log.info("Plan auto-advance: all {} steps complete — clearing overlays", plan.size());
+            activePlanSteps = null;
+            SwingUtilities.invokeLater(() -> {
+                if (overlayController != null) overlayController.clearAll();
+                if (panel != null) panel.getGoalsPanel().setProgress(plan.size(), plan.size());
+                if (panel != null) panel.setProgress(plan.size(), plan.size());
+            });
         }
     }
 
@@ -1305,8 +1401,12 @@ public class LeaguesAiPlugin extends Plugin {
             llmExecutor = null;
         }
 
-        // Tear down the OkHttp client AFTER the executor is gone so no in-flight
-        // requests are using it.
+        // Tear down OkHttp clients AFTER the executor is gone so no in-flight
+        // requests are using them.
+        if (wikiItemLookup != null) {
+            wikiItemLookup.close();
+            wikiItemLookup = null;
+        }
         if (openAiClient != null) {
             openAiClient.close();
             openAiClient = null;

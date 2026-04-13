@@ -136,6 +136,10 @@ public class HeartbeatTicker {
             return;
         }
 
+        // Don't fire coaching messages when the player has no active goal.
+        String goal = ctx.getCurrentGoal();
+        if (goal == null || goal.isEmpty()) return;
+
         PlanProgress progress = computeProgress(ctx);
 
         String text;

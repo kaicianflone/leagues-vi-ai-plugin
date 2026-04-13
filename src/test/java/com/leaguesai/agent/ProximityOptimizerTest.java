@@ -58,6 +58,7 @@ public class ProximityOptimizerTest {
         return PlayerContext.builder()
                 .location(new WorldPoint(x, y, 0))
                 .unlockedAreas(Collections.emptySet())
+                .leaguesMode(true)
                 .build();
     }
 

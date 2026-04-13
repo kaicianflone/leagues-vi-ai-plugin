@@ -5,6 +5,71 @@ All notable changes to the Leagues VI AI Plugin. Format loosely follows
 pre-launch (2026-04-15); the first tagged release will be cut on or after
 launch day.
 
+## [0.4.0.0] — 2026-04-13 — PR 5: CRAFT Goals, Leagues Mode, Inventory Auto-Advance
+
+You can now say "make a staff of air" or "smith rune platebody" and the plugin looks
+up the recipe on the OSRS wiki, builds a material-gather plan, and walks you to each
+shop or bank step with overlays. Ironman mode is now a toggleable setting that hides
+leagues-only personas and disables relic/area/pact goals. Plan steps auto-advance when
+you pick up the required item.
+
+### Added
+
+- **`GoalType.CRAFT`** — new goal type triggered by crafting verbs (make, craft, smith,
+  fletch, brew, cook). `GoalSpecParser` detects intent and `GoalPlanner` calls
+  `WikiItemLookup.lookupCraftingRecipe` to parse the recipe from OSRS wiki wikitext.
+- **`WikiItemLookup`** — new class (`WikiItemLookup.java`). Fetches and parses OSRS wiki
+  wikitext for `{{Crafting|`, `{{Smithing|`, `{{Fletching|`, `{{Cooking|`, `{{Herblore|`
+  templates. Extracts materials, quantities, skill level, and XP. Also handles shop
+  location lookups and `CRAFT_ALIASES` for common player aliases (e.g., "air staff").
+- **`SkillingStepBuilder`** — new helper that assembles CRAFT plan steps (gather
+  materials → craft) from a `CraftingRecipe`.
+- **`ItemDependencyGraph.findLongestMatchingItem`** — two-pass item name matching:
+  bag-of-words (order-agnostic, handles "air staff" → "Staff of air") then exact
+  substring fallback. Pre-sorted longest-first list for O(k) lookup.
+- **Inventory auto-advance** — `LeaguesAiPlugin.onInventoryStateEvent` watches the
+  player's inventory and advances the active plan step when `completionItemIds` are
+  satisfied. `PlannedStep.completionItemMinQtys` added so bank steps require
+  `coins >= shopValue`, not just `coins > 0`.
+- **Leagues/ironman mode toggle** — `LeaguesAiConfig.leaguesMode` boolean config key.
+  `SettingsPanel` now has a checkbox (persisted across restarts). Leagues-only personas
+  (points_chaser, build_architect, explorer, sprinter, sirpugger) are hidden in ironman
+  mode. `GoalSpecParser` gates RELIC/AREA/PACT goal shapes on the mode flag.
+- **`scrape-meta.sh`** — new scraper script for item stats via wiki Infobox_Bonuses
+  transclusion query.
+- **CRAFT test suite** — `WikiItemLookupTest`, `GoalSpecParserCraftTest`,
+  `GoalPlannerCraftTest`, `ItemMatchingTest`, `CraftableItemsCatalog` (19 items across
+  Crafting/Smithing/Fletching/Cooking/Herblore). 406 tests total, 0 failures.
+
+### Changed
+
+- **`ItemStatsScraper`** rewritten from Cargo API (unavailable on OSRS wiki) to
+  `Template:Infobox_Bonuses` transclusion query + batch wikitext parse.
+- **`WikiScraper`** extended to scrape item shop data alongside tasks.
+- **`PromptBuilder`** updated to include `leaguesMode` in player context.
+- **`UnlockablesPanel`** overhauled: collapsible sections, search filter, improved
+  pact tree rendering.
+- **`ChatPanel`** plan-just-created flag prevents "you already have a plan" reply
+  immediately after a plan is built.
+- **`WidgetOverlay`** ported additional Quest Helper widget highlight patterns.
+
+### Fixed
+
+- `SettingsPanel` leagues-mode checkbox was hardcoded to `true` on startup,
+  ignoring saved `leaguesMode=false` config. Now calls `setLeaguesMode(initialValue)`
+  at startup.
+- Bank step auto-advance fired on any coins present (`coins > 0`) instead of enough
+  coins (`coins >= shopValue`). Fixed via `PlannedStep.completionItemMinQtys`.
+- `activePlanSteps`/`activePlanStepIndex` volatile write order inverted — game thread
+  could see new step list with stale index from previous plan. Fixed by writing index=0
+  before setting the new step list.
+- `WikiItemLookup` `OkHttpClient` was never closed on plugin reload, leaking dispatcher
+  threads. Now implements `Closeable`; `shutDown()` calls `wikiItemLookup.close()`.
+- Template skill detection in `lookupCraftingRecipe` picked array-first template instead
+  of wikitext-first. Fixed to use `indexOf` position.
+- `ItemDependencyGraph` catalog slug inserts now use `putIfAbsent` to preserve
+  `item_dependencies` data priority over catalog stubs.
+
 ## [0.3.0.0] — 2026-04-10 — PR 3: Builds System
 
 Friends can now load a curated build (Melee Bosser, Ranged PvM, Skiller, etc.),

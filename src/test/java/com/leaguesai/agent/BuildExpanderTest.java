@@ -263,6 +263,7 @@ public class BuildExpanderTest {
         PlayerContext ctx = PlayerContext.builder()
                 .leaguePoints(0)
                 .completedTasks(Collections.emptySet())
+                .leaguesMode(true)
                 .build();
 
         CompositeGoal result = buildExpander.expand(null, ctx);

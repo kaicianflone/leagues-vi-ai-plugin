@@ -57,7 +57,7 @@ public class ChatServiceRagTest {
                 .leaguePoints(0)
                 .combatLevel(3)
                 .currentGoal("test goal")
-                .currentPlan(new java.util.ArrayList<>())
+                .leaguesMode(true)
                 .build();
         when(contextAssembler.assemble()).thenReturn(ctx);
 

@@ -10,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -51,6 +52,19 @@ public class ItemDependencyGraph {
      * iterating every name to find the longest one.
      */
     private volatile List<String> sortedNamesLongestFirst = Collections.emptyList();
+
+    /**
+     * Items from the {@code items} equipment catalog that have no rows in
+     * {@code item_dependencies} yet. Keyed by item slug.
+     * itemId → wiki URL
+     */
+    private volatile Map<String, String> catalogWikiUrls = Collections.emptyMap();
+
+    /** itemId → display name (from the items catalog). */
+    private volatile Map<String, String> catalogDisplayNames = Collections.emptyMap();
+
+    /** itemId → OSRS game item ID (wiki_item_id column; 0 means unknown). */
+    private volatile Map<String, Integer> catalogGameIds = Collections.emptyMap();
 
     public ItemDependencyGraph(File dbFile) {
         this.dbFile = dbFile;
@@ -149,6 +163,42 @@ public class ItemDependencyGraph {
                 immutableGraph.put(entry.getKey(), Collections.unmodifiableList(entry.getValue()));
             }
             this.graph = Collections.unmodifiableMap(immutableGraph);
+
+            // Load the equipment items catalog (4000+ items with wiki URLs) so that
+            // name matching fires even when item_dependencies is empty. Items that are
+            // in both tables are skipped in favor of the richer item_dependencies data.
+            Map<String, String> newCatalogWikiUrls = new HashMap<>();
+            Map<String, String> newCatalogDisplayNames = new HashMap<>();
+            Map<String, Integer> newCatalogGameIds = new HashMap<>();
+            try (Statement catSel = conn.createStatement();
+                 ResultSet catRs = catSel.executeQuery(
+                         "SELECT id, wiki_item_id, name, wiki_url FROM items " +
+                         "WHERE wiki_url IS NOT NULL AND wiki_url != ''")) {
+                while (catRs.next()) {
+                    String itemId = catRs.getString("id");
+                    if (itemId == null || newGraph.containsKey(itemId)) continue;
+                    String displayName = catRs.getString("name");
+                    String wikiUrl = catRs.getString("wiki_url");
+                    int gameId = catRs.getInt("wiki_item_id");
+                    newCatalogWikiUrls.put(itemId, wikiUrl);
+                    if (displayName != null) newCatalogDisplayNames.put(itemId, displayName);
+                    newCatalogGameIds.put(itemId, gameId);
+                    // Add to nameToId so GoalSpecParser and findLongestMatchingItem can resolve these.
+                    // Use putIfAbsent: item_dependencies rows take priority over catalog stubs.
+                    // Two different itemIds can produce the same normalized name — the richer
+                    // item_dependencies entry (loaded first) should win.
+                    if (displayName != null) {
+                        newNameToId.putIfAbsent(displayName.toLowerCase(Locale.ROOT).trim(), itemId);
+                    }
+                    newNameToId.putIfAbsent(itemId.replace('_', ' '), itemId);
+                }
+            } catch (Exception catEx) {
+                log.warn("ItemDependencyGraph: failed to load items catalog: {}", catEx.getMessage());
+            }
+            this.catalogWikiUrls = Collections.unmodifiableMap(newCatalogWikiUrls);
+            this.catalogDisplayNames = Collections.unmodifiableMap(newCatalogDisplayNames);
+            this.catalogGameIds = Collections.unmodifiableMap(newCatalogGameIds);
+
             this.nameToId = Collections.unmodifiableMap(newNameToId);
 
             // Pre-sort names longest-first so findLongestMatchingItem can break on first match.
@@ -156,8 +206,8 @@ public class ItemDependencyGraph {
             sorted.sort((a, b) -> Integer.compare(b.length(), a.length()));
             this.sortedNamesLongestFirst = Collections.unmodifiableList(sorted);
 
-            log.info("ItemDependencyGraph: loaded {} item dependencies ({} unique items)",
-                    totalRows, this.graph.size());
+            log.info("ItemDependencyGraph: loaded {} item dependencies ({} unique items) + {} catalog items",
+                    totalRows, this.graph.size(), newCatalogWikiUrls.size());
 
         } catch (Exception e) {
             log.warn("ItemDependencyGraph: failed to load from DB — graph will be empty. Cause: {}",
@@ -230,9 +280,13 @@ public class ItemDependencyGraph {
      * Looks up an item by display name (case-insensitive) or slug. Used by
      * {@code GoalSpecParser} to resolve player-typed item names.
      *
+     * <p>For items that exist in the equipment catalog ({@code items} table) but
+     * have no rows in {@code item_dependencies}, returns a stub
+     * {@link ItemDependency} with {@link ObtainMethod#SHOP} so that the parser
+     * can build an ITEM {@link GoalSpec} and route to {@link WikiItemLookup}.
+     *
      * @param name display name, e.g. "Rune platebody", or slug "rune_platebody"
-     * @return the first {@link ItemDependency} row for the matched item, or
-     *         {@code null} if not found
+     * @return the first dependency row, a catalog stub, or {@code null} if unknown
      */
     public ItemDependency findItemByName(String name) {
         if (name == null || name.isBlank()) {
@@ -244,25 +298,80 @@ public class ItemDependencyGraph {
             return null;
         }
         List<ItemDependency> deps = graph.get(itemId);
-        if (deps == null || deps.isEmpty()) {
-            return null;
+        if (deps != null && !deps.isEmpty()) {
+            return deps.get(0);
         }
-        return deps.get(0);
+        // Catalog-only item: return a stub so the parser can build an ITEM GoalSpec.
+        if (catalogWikiUrls.containsKey(itemId)) {
+            String displayName = catalogDisplayNames.getOrDefault(itemId, name);
+            return ItemDependency.builder()
+                    .itemId(itemId)
+                    .itemName(displayName)
+                    .obtainMethod(ObtainMethod.SHOP)
+                    .sourceId(null)
+                    .sourceName(null)
+                    .skillRequired(null)
+                    .skillLevel(0)
+                    .qtyNeeded(1)
+                    .outputQty(1)
+                    .areaRequired(null)
+                    .build();
+        }
+        return null;
     }
+
+    /** Stop words ignored when doing bag-of-words item matching. */
+    private static final Set<String> STOP_WORDS = new HashSet<>(Arrays.asList(
+            "of", "the", "a", "an", "and", "with", "from", "to", "in", "on", "at", "for"
+    ));
 
     /**
      * Scans {@code lowerPhrase} for the longest item name it contains and returns
      * the corresponding {@link ItemDependency}, or {@code null} if no known item
      * name appears in the phrase.
      *
-     * <p>Uses a pre-sorted (longest-first) name list so the first match found is
-     * always the longest — O(k) where k is the index of the match rather than
-     * O(n) over the full name set.
+     * <p>Two passes:
+     * <ol>
+     *   <li><b>Bag-of-words pass</b> (order-agnostic) — finds multi-word items
+     *       whose content words all appear in the phrase regardless of order.
+     *       Handles "air staff" matching "Staff of air". Requires at least 2
+     *       content words to avoid false positives on single-word names.</li>
+     *   <li><b>Substring pass</b> (fallback) — exact substring match, longest-first,
+     *       for single-word items and exact phrases.</li>
+     * </ol>
      *
      * @param lowerPhrase the search phrase, already lowercased and trimmed
      */
     public ItemDependency findLongestMatchingItem(String lowerPhrase) {
         if (lowerPhrase == null || lowerPhrase.isEmpty()) return null;
+
+        // Pass 1: bag-of-words (order-agnostic). All content words of the item
+        // name must appear somewhere in the phrase words. Pick the name with the
+        // most content words (longest meaningful match).
+        Set<String> phraseWords = new HashSet<>(Arrays.asList(lowerPhrase.split("\\W+")));
+        String bestBowName = null;
+        int bestBowScore = 1; // require at least 2 content words
+        for (String name : sortedNamesLongestFirst) {
+            String[] words = name.split("\\W+");
+            int contentCount = 0;
+            int matchCount = 0;
+            for (String w : words) {
+                if (w.length() <= 1 || STOP_WORDS.contains(w)) continue;
+                contentCount++;
+                if (phraseWords.contains(w)) matchCount++;
+            }
+            if (contentCount >= 2 && matchCount == contentCount && contentCount > bestBowScore) {
+                bestBowName = name;
+                bestBowScore = contentCount;
+            }
+        }
+        if (bestBowName != null) {
+            ItemDependency dep = findItemByName(bestBowName);
+            if (dep != null) return dep;
+        }
+
+        // Pass 2: exact substring match, longest-first (handles single-word items
+        // and phrases where the item name appears verbatim).
         for (String name : sortedNamesLongestFirst) {
             if (lowerPhrase.contains(name)) {
                 ItemDependency dep = findItemByName(name);
@@ -282,11 +391,47 @@ public class ItemDependencyGraph {
     }
 
     /**
-     * Returns {@code true} if no item dependencies have been loaded.
-     * Useful for graceful UI handling when the DB is empty or missing.
+     * Returns {@code true} if neither item dependencies nor the equipment catalog
+     * have been loaded. After a successful {@link #loadFromDb()} call this will
+     * return {@code false} even when {@code item_dependencies} is empty, because
+     * the 4000+ item equipment catalog is also loaded.
      */
     public boolean isEmpty() {
-        return graph.isEmpty();
+        return graph.isEmpty() && catalogWikiUrls.isEmpty();
+    }
+
+    /**
+     * Returns {@code true} if the item slug is present in the equipment catalog
+     * ({@code items} table) but has no rows in {@code item_dependencies}.
+     * Used by {@link GoalPlanner} to decide whether to call {@link WikiItemLookup}.
+     */
+    public boolean isInCatalog(String itemId) {
+        return itemId != null && catalogWikiUrls.containsKey(itemId);
+    }
+
+    /**
+     * Returns the wiki URL for a catalog item, or {@code null} if not found.
+     * e.g. "https://oldschool.runescape.wiki/w/Staff_of_air".
+     */
+    public String getWikiUrl(String itemId) {
+        return itemId == null ? null : catalogWikiUrls.get(itemId);
+    }
+
+    /**
+     * Returns the display name for a catalog item, or {@code null} if not found.
+     */
+    public String getCatalogDisplayName(String itemId) {
+        return itemId == null ? null : catalogDisplayNames.get(itemId);
+    }
+
+    /**
+     * Returns the OSRS game item ID for a catalog item (the {@code wiki_item_id}
+     * column). Returns 0 if unknown.
+     */
+    public int getCatalogGameId(String itemId) {
+        if (itemId == null) return 0;
+        Integer id = catalogGameIds.get(itemId);
+        return id != null ? id : 0;
     }
 
     /**

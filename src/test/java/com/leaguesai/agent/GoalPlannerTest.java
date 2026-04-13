@@ -301,6 +301,7 @@ public class GoalPlannerTest {
         // Terminal B requires A; mark A as completed — A should not appear in batch
         PlayerContext ctx = PlayerContext.builder()
                 .completedTasks(Collections.singleton("A"))
+                .leaguesMode(true)
                 .build();
 
         GoalSpec spec = GoalSpec.builder()
@@ -458,6 +459,7 @@ public class GoalPlannerTest {
 
         PlayerContext ctx = PlayerContext.builder()
                 .completedTasks(Collections.singleton("smith_rune_plate"))
+                .leaguesMode(true)
                 .build();
 
         GoalSpec spec = GoalSpec.builder()

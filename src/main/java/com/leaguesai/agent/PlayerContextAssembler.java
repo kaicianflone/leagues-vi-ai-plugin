@@ -1,5 +1,6 @@
 package com.leaguesai.agent;
 
+import com.leaguesai.LeaguesAiConfig;
 import com.leaguesai.core.monitors.LocationMonitor;
 import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
@@ -29,6 +30,7 @@ public class PlayerContextAssembler {
     private final LocationMonitor locationMonitor;
     private final ClientThread clientThread;
     private final ItemManager itemManager;
+    private final LeaguesAiConfig config;
 
     // Mutable internal state — writes are synchronized, volatile reads for simple scalars
     private final Set<String> completedTasks = new HashSet<>();
@@ -38,11 +40,12 @@ public class PlayerContextAssembler {
 
     @Inject
     public PlayerContextAssembler(Client client, LocationMonitor locationMonitor, ClientThread clientThread,
-                                  ItemManager itemManager) {
+                                  ItemManager itemManager, LeaguesAiConfig config) {
         this.client = client;
         this.locationMonitor = locationMonitor;
         this.clientThread = clientThread;
         this.itemManager = itemManager;
+        this.config = config;
     }
 
     /**
@@ -89,6 +92,7 @@ public class PlayerContextAssembler {
                 .combatLevel(combatLevel)
                 .currentGoal(currentGoal)
                 .currentPlan(new ArrayList<>(currentPlan))
+                .leaguesMode(config.leaguesMode())
                 .build();
     }
 

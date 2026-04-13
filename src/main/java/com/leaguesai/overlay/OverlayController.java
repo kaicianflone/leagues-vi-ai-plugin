@@ -70,6 +70,9 @@ public class OverlayController {
         if (data.getTargetNpcIds() != null && !data.getTargetNpcIds().isEmpty()) {
             npcHighlightOverlay.setTargetNpcIds(data.getTargetNpcIds());
         }
+        if (data.getTargetNpcNames() != null && !data.getTargetNpcNames().isEmpty()) {
+            npcHighlightOverlay.setTargetNpcNames(data.getTargetNpcNames());
+        }
         if (data.getTargetObjectIds() != null && !data.getTargetObjectIds().isEmpty()) {
             objectHighlightOverlay.setTargetObjectIds(data.getTargetObjectIds());
         }
@@ -81,6 +84,9 @@ public class OverlayController {
         }
         if (data.getWidgetIds() != null && !data.getWidgetIds().isEmpty()) {
             widgetOverlay.setTargetWidgetIds(data.getWidgetIds());
+        }
+        if (data.getShopItemGameIds() != null && !data.getShopItemGameIds().isEmpty()) {
+            widgetOverlay.setShopItemGameIds(data.getShopItemGameIds());
         }
 
         // Required items panel — pulled from the task itself, not OverlayData,

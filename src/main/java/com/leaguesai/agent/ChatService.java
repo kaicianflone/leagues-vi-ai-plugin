@@ -1,5 +1,6 @@
 package com.leaguesai.agent;
 
+import com.leaguesai.LeaguesAiConfig;
 import com.leaguesai.data.ChatHistoryStore;
 import com.leaguesai.data.TaskRepository;
 import com.leaguesai.data.UserPreferences;
@@ -33,6 +34,7 @@ public class ChatService {
     private volatile ItemSourceResolver itemSourceResolver;
     private final PersonaReviewer personaReviewer;
     private volatile ItemDependencyGraph itemDependencyGraph;
+    private volatile LeaguesAiConfig leaguesAiConfig;
 
     // Optional callback fired after a planner run succeeds. The plugin sets
     // this to push the plan to the UI (goals panel + overlays). The third
@@ -65,17 +67,28 @@ public class ChatService {
     private final List<OpenAiClient.Message> conversationHistory =
             Collections.synchronizedList(new ArrayList<>());
 
-    @Inject
+    /** Backward-compat constructor for tests that don't inject LeaguesAiConfig. Defaults to leagues mode = true. */
     public ChatService(LlmClient openAiClient,
                        PlayerContextAssembler contextAssembler,
                        TaskRepository taskRepo,
                        VectorIndex vectorIndex,
                        GoalPlanner goalPlanner) {
+        this(openAiClient, contextAssembler, taskRepo, vectorIndex, goalPlanner, null);
+    }
+
+    @Inject
+    public ChatService(LlmClient openAiClient,
+                       PlayerContextAssembler contextAssembler,
+                       TaskRepository taskRepo,
+                       VectorIndex vectorIndex,
+                       GoalPlanner goalPlanner,
+                       LeaguesAiConfig leaguesAiConfig) {
         this.openAiClient = openAiClient;
         this.contextAssembler = contextAssembler;
         this.taskRepo = taskRepo;
         this.vectorIndex = vectorIndex;
         this.goalPlanner = goalPlanner;
+        this.leaguesAiConfig = leaguesAiConfig;
         this.itemSourceResolver = openAiClient != null ? new ItemSourceResolver(openAiClient) : null;
         this.personaReviewer = openAiClient != null ? new PersonaReviewer(openAiClient) : null;
     }
@@ -90,7 +103,10 @@ public class ChatService {
     public String sendMessage(String userMessage) throws Exception {
         // Intent detection: if the message looks like a goal, run the planner first
         // so the LLM sees an actual ordered plan in the system prompt context.
+        final long genBefore = planGeneration.get();
         maybeTriggerPlanner(userMessage);
+        // True when maybeTriggerPlanner built a new plan for this specific message.
+        final boolean planJustCreated = planGeneration.get() != genBefore;
 
         // RAG: find relevant tasks via semantic search. Done OUTSIDE the lock
         // because both the embedding network call and the vector search may take
@@ -127,7 +143,7 @@ public class ChatService {
             PlayerContext ctx = contextAssembler.assemble();
             java.util.List<String> personas = userPreferences != null
                     ? userPreferences.getSelectedPersonas() : null;
-            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks, taskRepo, null, personas);
+            systemPrompt = PromptBuilder.buildSystemPrompt(ctx, relevantTasks, taskRepo, null, personas, planJustCreated);
 
             // Snapshot: copy the list so the network call doesn't need the lock
             snapshot = new ArrayList<>(conversationHistory);
@@ -304,14 +320,18 @@ public class ChatService {
             }
         }
 
-        // Item-intent: "get X", "i need X", "farm X", etc. Only trigger when the
-        // itemDependencyGraph is loaded AND an actual known item name appears in
+        // Item/craft-intent: "get X", "make X", "i need X", etc. Only trigger when
+        // the itemDependencyGraph is loaded AND an actual known item name appears in
         // the phrase, so "I need to level up" doesn't trigger the planner.
         if (!triggered && itemDependencyGraph != null && !itemDependencyGraph.isEmpty()) {
             if (lower.contains("get ") || lower.contains("need ") || lower.contains("want ")
-                    || lower.contains("farm ") || lower.contains("craft ") || lower.contains("obtain ")
+                    || lower.contains("make ") || lower.contains("farm ")
+                    || lower.contains("craft ") || lower.contains("smith ")
+                    || lower.contains("fletch ") || lower.contains("cook ")
+                    || lower.contains("brew ") || lower.contains("obtain ")
                     || lower.contains("i need") || lower.contains("i want")
-                    || lower.startsWith("get ") || lower.startsWith("need ")) {
+                    || lower.startsWith("get ") || lower.startsWith("need ")
+                    || lower.startsWith("make ")) {
                 if (itemDependencyGraph.findLongestMatchingItem(lower) != null) {
                     triggered = true;
                 }
@@ -334,53 +354,107 @@ public class ChatService {
             // matching. Returns TASK_BATCH for phrases the parser doesn't
             // recognise so we fall through to the existing flat path below.
             PlayerContext ctxForParser = contextAssembler.assemble();
-            GoalSpec spec = GoalSpecParser.parse(userMessage, taskRepo, itemDependencyGraph);
-            List<Task> targets;
+            boolean leaguesMode = leaguesAiConfig != null && leaguesAiConfig.leaguesMode();
+            GoalSpec spec = GoalSpecParser.parse(userMessage, taskRepo, itemDependencyGraph, leaguesMode);
+            List<Task> targets = new ArrayList<>();
             CompositeGoal composite = null;
 
             if (spec.getType() == GoalType.RELIC
                     || spec.getType() == GoalType.AREA
                     || spec.getType() == GoalType.PACT
-                    || spec.getType() == GoalType.ITEM) {
+                    || spec.getType() == GoalType.ITEM
+                    || spec.getType() == GoalType.CRAFT) {
                 composite = goalPlanner.resolveCompositeGoal(spec, ctxForParser);
+                if (composite == null) {
+                    log.info("Planner: leagues goal '{}' skipped (ironman mode)", spec.getType());
+                    return;
+                }
                 log.info("Composite goal resolved: type={} target={} reachable={} gap={} covered={} children={}",
                         spec.getType(), spec.getTargetName(), composite.isReachable(),
                         composite.getPointsGap(), composite.getCoveredBy(),
                         composite.getChildren().size());
                 targets = new ArrayList<>(composite.getTaskBatch());
             } else {
-                targets = goalPlanner.resolveGoalTasks(userMessage);
-            }
-
-            if (targets.isEmpty() && composite == null) {
-                log.info("Planner: no tasks matched goal '{}'", userMessage);
-                return;
-            }
-
-            List<Task> sorted;
-            if (composite != null) {
-                // Task batch from the composite resolver is already curated
-                // and ordered by points-per-effort. Skip DAG expansion — we
-                // don't want prereq chains pulling in unrelated tasks for a
-                // relic unlock goal.
-                sorted = targets;
-            } else {
-                Set<String> completed = new HashSet<>(); // TODO: pull from contextAssembler when wired
-                List<Task> dag = goalPlanner.buildDag(targets, completed);
-                try {
-                    sorted = goalPlanner.topologicalSort(dag);
-                } catch (IllegalStateException cycle) {
-                    log.warn("Planner: cycle detected, falling back to insertion order: {}", cycle.getMessage());
-                    sorted = dag;
+                // When GoalSpecParser returned TASK_BATCH but the message was triggered,
+                // try one more item scan in case the phrase didn't have a recognized keyword
+                // (e.g., "make me a plan to buy a staff of air" → no "need"/"get" keyword).
+                if (itemDependencyGraph != null && !itemDependencyGraph.isEmpty()) {
+                    String lowerMsg = userMessage.toLowerCase();
+                    com.leaguesai.data.model.ItemDependency found =
+                            itemDependencyGraph.findLongestMatchingItem(lowerMsg);
+                    if (found != null) {
+                        String lowerMsg2 = userMessage.toLowerCase();
+                        boolean isCraftMsg = lowerMsg2.contains("make ") || lowerMsg2.contains("craft ")
+                                || lowerMsg2.contains("smith ") || lowerMsg2.contains("fletch ")
+                                || lowerMsg2.contains("brew ") || lowerMsg2.contains("cook ");
+                        GoalSpec itemSpec = GoalSpec.builder()
+                                .type(isCraftMsg ? GoalType.CRAFT : GoalType.ITEM)
+                                .targetId(found.getItemId())
+                                .targetName(found.getItemName())
+                                .rawPhrase(userMessage)
+                                .unlockCost(0)
+                                .build();
+                        composite = goalPlanner.resolveCompositeGoal(itemSpec, ctxForParser);
+                        if (composite != null) {
+                            log.info("Planner: fallback item detection found '{}' in '{}'",
+                                    found.getItemName(), userMessage);
+                            targets = new ArrayList<>(composite.getTaskBatch());
+                        }
+                    }
+                }
+                if (composite == null) {
+                    targets = goalPlanner.resolveGoalTasks(userMessage);
                 }
             }
 
-            // Reuse the context we already assembled at the top instead of
-            // routing through ClientThread again for the player's location.
-            WorldPoint loc = ctxForParser.getLocation();
-            List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
+            // If taskBatch is empty but the wiki lookup produced directSteps, use those.
+            // Prepend any skilling steps (train skill before crafting/smithing the item).
+            List<PlannedStep> steps;
+            if (composite != null && targets.isEmpty()
+                    && composite.getDirectSteps() != null && !composite.getDirectSteps().isEmpty()) {
+                List<PlannedStep> combined = new ArrayList<>();
+                if (composite.getSkillingSteps() != null) combined.addAll(composite.getSkillingSteps());
+                combined.addAll(composite.getDirectSteps());
+                steps = combined;
+                log.info("Planner: using {} direct steps (+ {} skilling) from wiki lookup for '{}'",
+                        composite.getDirectSteps().size(),
+                        composite.getSkillingSteps() != null ? composite.getSkillingSteps().size() : 0,
+                        userMessage);
+            } else {
+                if (targets.isEmpty() && composite == null) {
+                    log.info("Planner: no tasks matched goal '{}'", userMessage);
+                    return;
+                }
 
-            List<PlannedStep> steps = buildSteps(optimized);
+                List<Task> sorted;
+                if (composite != null) {
+                    // Task batch from the composite resolver is already curated
+                    // and ordered by points-per-effort. Skip DAG expansion.
+                    sorted = targets;
+                } else {
+                    Set<String> completed = new HashSet<>();
+                    List<Task> dag = goalPlanner.buildDag(targets, completed);
+                    try {
+                        sorted = goalPlanner.topologicalSort(dag);
+                    } catch (IllegalStateException cycle) {
+                        log.warn("Planner: cycle detected, falling back to insertion order: {}", cycle.getMessage());
+                        sorted = dag;
+                    }
+                }
+
+                WorldPoint loc = ctxForParser.getLocation();
+                List<Task> optimized = PlannerOptimizer.optimizeOrder(sorted, loc);
+                List<PlannedStep> taskSteps = buildSteps(optimized);
+                // Prepend skill-training steps when the item has a craft/smith dependency chain.
+                if (composite != null && composite.getSkillingSteps() != null
+                        && !composite.getSkillingSteps().isEmpty()) {
+                    List<PlannedStep> combined = new ArrayList<>(composite.getSkillingSteps());
+                    combined.addAll(taskSteps);
+                    steps = combined;
+                } else {
+                    steps = taskSteps;
+                }
+            }
 
             // Relic-aware proximity reorder (post-PlannedStep pass; no-op when null).
             if (proximityOptimizer != null && !steps.isEmpty()) {

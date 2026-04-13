@@ -8,6 +8,7 @@ import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import javax.swing.JOptionPane;
 
@@ -24,6 +25,9 @@ public class SettingsPanel extends JPanel {
     private static final String[] MODEL_OPTIONS = {
             "gpt-5.4", "gpt-5", "gpt-4o", "gpt-4o-mini"
     };
+
+    private static final Set<String> LEAGUES_ONLY_PERSONAS =
+            Set.of("points_chaser", "build_architect", "explorer", "sprinter", "sirpugger");
 
     private static final String[][] PERSONA_DEFS = {
             {"points_chaser",  "Points Chaser — pts/hr, task batching, parallel completion"},
@@ -49,6 +53,7 @@ public class SettingsPanel extends JPanel {
     private final JLabel dbStatusLabel;
     private final JComboBox<String> modelDropdown;
     private final JCheckBox[] personaCheckboxes;
+    private JCheckBox leaguesModeCheckbox;
 
     private Consumer<String> onGoalSet;
     private Consumer<String> onApiKeyChanged;
@@ -56,6 +61,7 @@ public class SettingsPanel extends JPanel {
     private Runnable onSignIn;
     private Consumer<String> onModelChanged;
     private Consumer<List<String>> onPersonasChanged;
+    private Consumer<Boolean> onLeaguesModeChanged;
 
     public SettingsPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
@@ -81,6 +87,18 @@ public class SettingsPanel extends JPanel {
             }
         });
         add(signInButton);
+        add(Box.createVerticalStrut(10));
+
+        // Leagues Mode toggle
+        leaguesModeCheckbox = new JCheckBox("Leagues Mode");
+        leaguesModeCheckbox.setSelected(true); // default; overridden by setLeaguesMode() during startup
+        leaguesModeCheckbox.setBackground(BACKGROUND_COLOR);
+        leaguesModeCheckbox.setForeground(TEXT_COLOR);
+        leaguesModeCheckbox.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+        leaguesModeCheckbox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leaguesModeCheckbox.setFocusPainted(false);
+        leaguesModeCheckbox.addActionListener(e -> applyLeaguesMode(leaguesModeCheckbox.isSelected()));
+        add(leaguesModeCheckbox);
         add(Box.createVerticalStrut(10));
 
         // Model selector
@@ -405,6 +423,48 @@ public class SettingsPanel extends JPanel {
 
     public void setOnPersonasChanged(Consumer<List<String>> callback) {
         this.onPersonasChanged = callback;
+    }
+
+    public void setOnLeaguesModeChanged(Consumer<Boolean> callback) {
+        this.onLeaguesModeChanged = callback;
+    }
+
+    /**
+     * Synchronizes the leagues-mode checkbox and persona visibility to the given value.
+     * Called during plugin startup so the saved config value is reflected in the UI.
+     * Does NOT fire {@code onLeaguesModeChanged} (the plugin already owns the value).
+     */
+    public void setLeaguesMode(boolean leaguesMode) {
+        SwingUtilities.invokeLater(() -> {
+            leaguesModeCheckbox.setSelected(leaguesMode);
+            for (int i = 0; i < personaCheckboxes.length; i++) {
+                String personaId = PERSONA_DEFS[i][0];
+                if (LEAGUES_ONLY_PERSONAS.contains(personaId)) {
+                    personaCheckboxes[i].setVisible(leaguesMode);
+                    if (!leaguesMode) personaCheckboxes[i].setSelected(false);
+                }
+            }
+        });
+    }
+
+    private void applyLeaguesMode(boolean leaguesMode) {
+        SwingUtilities.invokeLater(() -> {
+            for (int i = 0; i < personaCheckboxes.length; i++) {
+                String personaId = PERSONA_DEFS[i][0];
+                if (LEAGUES_ONLY_PERSONAS.contains(personaId)) {
+                    if (!leaguesMode) {
+                        personaCheckboxes[i].setSelected(false);
+                        personaCheckboxes[i].setVisible(false);
+                    } else {
+                        personaCheckboxes[i].setVisible(true);
+                    }
+                }
+            }
+            firePersonasChanged();
+            if (onLeaguesModeChanged != null) {
+                onLeaguesModeChanged.accept(leaguesMode);
+            }
+        });
     }
 
     private void firePersonasChanged() {

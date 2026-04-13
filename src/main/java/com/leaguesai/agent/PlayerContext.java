@@ -23,4 +23,5 @@ public class PlayerContext {
     private final int combatLevel;
     private final String currentGoal;
     private final List<PlannedStep> currentPlan;
+    private final boolean leaguesMode;
 }

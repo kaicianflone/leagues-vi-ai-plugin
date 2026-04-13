@@ -40,6 +40,7 @@ public class LocalHeartbeatTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
     }
 

@@ -21,7 +21,7 @@ public class ChatPanel extends JPanel {
     private static final Color USER_BUBBLE = new Color(0, 122, 255);
     private static final Color AI_BUBBLE = new Color(60, 60, 60);
     private static final Color ERROR_BUBBLE = new Color(120, 30, 30);
-    private static final int BUBBLE_MAX_WIDTH = 180;
+    private static final int BUBBLE_MAX_WIDTH = 148;
     /** Cap on retained message history to keep memory bounded across long sessions. */
     private static final int MAX_CHAT_HISTORY = 200;
 
@@ -44,13 +44,13 @@ public class ChatPanel extends JPanel {
     public ChatPanel() {
         setLayout(new BorderLayout(0, 4));
         setBackground(BACKGROUND_COLOR);
-        setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
 
         // Message list — vertical stack of bubble rows
         messageList = new JPanel();
         messageList.setLayout(new BoxLayout(messageList, BoxLayout.Y_AXIS));
         messageList.setBackground(BACKGROUND_COLOR);
-        messageList.setBorder(new EmptyBorder(8, 8, 8, 8));
+        messageList.setBorder(new EmptyBorder(4, 0, 4, 0));
 
         scrollPane = new JScrollPane(messageList);
         scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
@@ -72,7 +72,7 @@ public class ChatPanel extends JPanel {
         goalsLinkButton.setFocusPainted(false);
         goalsLinkButton.setBorderPainted(false);
         goalsLinkButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        goalsLinkButton.setMargin(new Insets(2, 8, 2, 8));
+        goalsLinkButton.setMargin(new Insets(2, 0, 2, 8));
         goalsLinkButton.addActionListener(e -> {
             if (onOpenGoals != null) onOpenGoals.run();
         });
@@ -210,30 +210,22 @@ public class ChatPanel extends JPanel {
     }
 
     private JPanel createBubble(String text, boolean isUser) {
-        JPanel bubble = new JPanel();
-        bubble.setLayout(new BorderLayout());
-        Color bgColor = isUser ? USER_BUBBLE : AI_BUBBLE;
-        Color fgColor = Color.WHITE;
-        bubble.setBackground(bgColor);
+        JPanel bubble = new JPanel(new BorderLayout());
+        bubble.setBackground(isUser ? USER_BUBBLE : AI_BUBBLE);
         bubble.setBorder(new EmptyBorder(8, 12, 8, 12));
 
-        JTextArea textArea = new JTextArea(text);
-        textArea.setEditable(false);
-        textArea.setLineWrap(true);
-        textArea.setWrapStyleWord(true);
-        textArea.setOpaque(false);
-        textArea.setForeground(fgColor);
-        textArea.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
-        textArea.setBorder(null);
+        // HTML label: Swing's HTML renderer computes preferred height correctly
+        // without needing a live graphics context, avoiding the font-metrics issue
+        // that caused text to be clipped when using a pre-measured JTextArea.
+        String html = "<html><div style='width:" + BUBBLE_MAX_WIDTH + "px'>"
+                + markdownToHtml(text)
+                + "</div></html>";
+        JLabel label = new JLabel(html);
+        label.setForeground(Color.WHITE);
+        label.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
 
-        textArea.setSize(BUBBLE_MAX_WIDTH, Short.MAX_VALUE);
-        int height = textArea.getPreferredSize().height;
-        textArea.setPreferredSize(new Dimension(BUBBLE_MAX_WIDTH, height));
-
-        bubble.add(textArea, BorderLayout.CENTER);
-        Dimension bubblePref = new Dimension(BUBBLE_MAX_WIDTH + 24, height + 16);
-        bubble.setPreferredSize(bubblePref);
-        bubble.setMaximumSize(bubblePref);
+        bubble.add(label, BorderLayout.CENTER);
+        bubble.setMaximumSize(new Dimension(BUBBLE_MAX_WIDTH + 24, Integer.MAX_VALUE));
         return bubble;
     }
 
@@ -371,6 +363,31 @@ public class ChatPanel extends JPanel {
         Timer t = new Timer(1500, e -> copyButton.setText(original));
         t.setRepeats(false);
         t.start();
+    }
+
+    /**
+     * Converts a subset of Markdown to Swing-compatible HTML 3.2.
+     * HTML-escapes first so injected tags can't bleed through.
+     */
+    private String markdownToHtml(String text) {
+        if (text == null) return "";
+        // 1. Escape HTML entities first
+        String s = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        // 2. Horizontal rules
+        s = s.replaceAll("(?m)^-{3,}$", "<hr>");
+        // 3. Headers (any depth) → bold
+        s = s.replaceAll("(?m)^#{1,6}\\s+(.+)$", "<b>$1</b>");
+        // 4. Bold
+        s = s.replaceAll("\\*\\*(.+?)\\*\\*", "<b>$1</b>");
+        // 5. Italic (not adjacent to another *)
+        s = s.replaceAll("(?<!\\*)\\*([^*\\n]+?)\\*(?!\\*)", "<i>$1</i>");
+        // 6. Inline code
+        s = s.replaceAll("`([^`]+)`", "<code>$1</code>");
+        // 7. Bullet list items
+        s = s.replaceAll("(?m)^[-*]\\s+(.+)$", "\u2022 $1");
+        // 8. Newlines
+        s = s.replace("\n", "<br>");
+        return s;
     }
 
     private String escapeHtml(String s) {

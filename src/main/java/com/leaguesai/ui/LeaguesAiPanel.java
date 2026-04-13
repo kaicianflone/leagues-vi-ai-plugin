@@ -18,6 +18,7 @@ public class LeaguesAiPanel extends PluginPanel {
     private final AsciiSpriteRenderer spriteRenderer;
     private final JLabel statusLabel;
     private final JLabel progressLabel;
+    private JLabel modeLabel;
 
     private final ChatPanel chatPanel;
     private final GoalsPanel goalsPanel;
@@ -95,6 +96,13 @@ public class LeaguesAiPanel extends PluginPanel {
         progressLabel.setHorizontalAlignment(SwingConstants.CENTER);
         progressLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         topPanel.add(progressLabel);
+
+        modeLabel = new JLabel("Leagues");
+        modeLabel.setForeground(new Color(120, 180, 255));
+        modeLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 10));
+        modeLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        modeLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        topPanel.add(modeLabel);
         topPanel.add(Box.createVerticalStrut(4));
 
         add(topPanel, BorderLayout.NORTH);
@@ -288,5 +296,9 @@ public class LeaguesAiPanel extends PluginPanel {
 
     public void setProgress(int completed, int total) {
         progressLabel.setText(completed + "/" + total + " tasks");
+    }
+
+    public void setLeaguesMode(boolean leaguesMode) {
+        SwingUtilities.invokeLater(() -> modeLabel.setText(leaguesMode ? "Leagues" : "Ironman"));
     }
 }

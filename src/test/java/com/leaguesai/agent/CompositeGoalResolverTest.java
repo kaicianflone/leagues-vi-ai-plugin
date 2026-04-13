@@ -41,6 +41,7 @@ public class CompositeGoalResolverTest {
                 .combatLevel(50)
                 .currentGoal(null)
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
     }
 
@@ -246,6 +247,7 @@ public class CompositeGoalResolverTest {
                 .leaguePoints(0)
                 .combatLevel(50)
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
 
         GoalSpec spec = GoalSpec.builder()

@@ -34,5 +34,13 @@ public enum GoalType {
      * to a prerequisite chain of crafting steps and Leagues tasks. Falls back to
      * LLM source lookup for items not in the dependency graph.
      */
-    ITEM
+    ITEM,
+
+    /**
+     * A crafting goal — make a specific item via a skill (Crafting, Smithing,
+     * Fletching, Cooking, etc.). Resolves by fetching the OSRS wiki crafting
+     * recipe, building steps for each ingredient (buy/obtain), and adding a
+     * final "craft" step at the appropriate location.
+     */
+    CRAFT
 }

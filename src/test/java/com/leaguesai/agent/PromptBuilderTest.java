@@ -47,6 +47,7 @@ public class PromptBuilderTest {
                 .combatLevel(50)
                 .currentGoal("Complete all easy tasks in Misthalin")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
 
         String prompt = PromptBuilder.buildSystemPrompt(ctx);
@@ -78,6 +79,7 @@ public class PromptBuilderTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
 
         String prompt = PromptBuilder.buildSystemPrompt(ctx);
@@ -102,6 +104,7 @@ public class PromptBuilderTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
 
         Task task = Task.builder()
@@ -137,6 +140,7 @@ public class PromptBuilderTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
 
         String prompt = PromptBuilder.buildSystemPrompt(ctx, Collections.emptyList());
@@ -157,6 +161,7 @@ public class PromptBuilderTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
     }
 
@@ -290,6 +295,7 @@ public class PromptBuilderTest {
                 .combatLevel(3)
                 .currentGoal("")
                 .currentPlan(new ArrayList<>())
+                .leaguesMode(true)
                 .build();
         String result = PromptBuilder.buildGearContext(Collections.singletonList(item), ctx);
         assertTrue("Should flag currently equipped", result.contains("(currently equipped)"));

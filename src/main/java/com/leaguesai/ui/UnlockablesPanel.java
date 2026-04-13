@@ -15,8 +15,11 @@ import javax.swing.BoxLayout;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -25,6 +28,7 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -83,6 +87,7 @@ public class UnlockablesPanel extends JPanel {
 
     private Consumer<String> onSetGoal;
     private Consumer<GearItem> onSetGearGoal;
+    private boolean leaguesMode = true;
 
     /**
      * Tracks which collapsible sections were open before the last rebuild so
@@ -121,6 +126,12 @@ public class UnlockablesPanel extends JPanel {
         this.onSetGearGoal = callback;
     }
 
+    /** Toggle leagues/ironman mode. Triggers a rebuild to show/hide leagues-only sections. */
+    public void setLeaguesMode(boolean leaguesMode) {
+        this.leaguesMode = leaguesMode;
+        rebuild();
+    }
+
     /**
      * Rebuild all three sections from the repo. Called once at construction;
      * can be called again after the scraper has been re-run to refresh the
@@ -129,26 +140,30 @@ public class UnlockablesPanel extends JPanel {
     public void rebuild() {
         SwingUtilities.invokeLater(() -> {
             removeAll();
-            JPanel relicsSection = buildRelicsSection();
-            JPanel areasSection = buildAreasSection();
-            JPanel pactsSection = buildPactsSection();
-            JPanel gearSection  = buildGearSection();
-
-            // Every child in a BoxLayout.Y_AXIS parent must have LEFT
-            // alignmentX, otherwise Swing centers rows against the widest
-            // sibling and content appears shifted right inside the panel.
-            relicsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-            areasSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-            pactsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+            JPanel gearSection = buildGearSection();
             gearSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-            add(relicsSection);
-            add(leftAlignedStrut(4));
-            add(areasSection);
-            add(leftAlignedStrut(4));
-            add(pactsSection);
-            add(leftAlignedStrut(4));
             add(gearSection);
+
+            if (leaguesMode) {
+                JPanel relicsSection = buildRelicsSection();
+                JPanel areasSection = buildAreasSection();
+                JPanel pactsSection = buildPactsSection();
+
+                // Every child in a BoxLayout.Y_AXIS parent must have LEFT
+                // alignmentX, otherwise Swing centers rows against the widest
+                // sibling and content appears shifted right inside the panel.
+                relicsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+                areasSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+                pactsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+                add(leftAlignedStrut(4));
+                add(relicsSection);
+                add(leftAlignedStrut(4));
+                add(areasSection);
+                add(leftAlignedStrut(4));
+                add(pactsSection);
+            }
+
             revalidate();
             repaint();
         });
@@ -282,47 +297,126 @@ public class UnlockablesPanel extends JPanel {
         return buildCollapsible(title, child);
     }
 
-    // Region display order — "" = no region / starter gear shown first.
+    // Region display order — "" = Global / no region shown last.
     private static final String[] GEAR_REGION_ORDER = {
-        "", "Varlamore", "Karamja",
+        "Varlamore", "Karamja",
         "Asgarnia", "Desert", "Fremennik", "Kandarin",
-        "Kebos_and_Kourend", "Morytania", "Tirannwn", "Wilderness"
+        "Kebos_and_Kourend", "Morytania", "Tirannwn", "Wilderness", ""
     };
 
     private JPanel buildGearSection() {
         List<GearItem> items = gearRepo != null ? gearRepo.listAll() : java.util.Collections.emptyList();
 
-        // Group by region key preserving GEAR_REGION_ORDER.
-        Map<String, JPanel> regionGroups = new LinkedHashMap<>();
+        // Group by region preserving GEAR_REGION_ORDER; Global ("") goes last.
+        Map<String, List<GearItem>> byRegion = new LinkedHashMap<>();
         for (String region : GEAR_REGION_ORDER) {
-            regionGroups.put(region, newGroupPanel(gearAreaDisplayName(region)));
+            byRegion.put(region, new ArrayList<>());
         }
-
-        int count = 0;
         for (GearItem item : items) {
             String region = item.getRegion() != null ? item.getRegion() : "";
-            JPanel grp = regionGroups.computeIfAbsent(region, k -> newGroupPanel(gearAreaDisplayName(k)));
-            String meta = buildGearMeta(item);
-            grp.add(makeGearRow(item, meta));
-            count++;
+            byRegion.computeIfAbsent(region, k -> new ArrayList<>()).add(item);
         }
 
         JPanel child = newChildColumn();
-        for (Map.Entry<String, JPanel> entry : regionGroups.entrySet()) {
-            if (entry.getValue().getComponentCount() > 1) {
-                child.add(entry.getValue());
-                child.add(leftAlignedStrut(2));
+
+        // Search bar with placeholder text
+        Color searchFg = new Color(200, 200, 200);
+        Color placeholderFg = new Color(110, 110, 110);
+        String placeholder = "Search gear...";
+        JTextField searchField = new JTextField(placeholder);
+        searchField.setBackground(new Color(50, 50, 50));
+        searchField.setForeground(placeholderFg);
+        searchField.setCaretColor(searchFg);
+        searchField.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+        searchField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusGained(java.awt.event.FocusEvent e) {
+                if (searchField.getText().equals(placeholder)) {
+                    searchField.setText("");
+                    searchField.setForeground(searchFg);
+                }
             }
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                if (searchField.getText().isEmpty()) {
+                    searchField.setText(placeholder);
+                    searchField.setForeground(placeholderFg);
+                }
+            }
+        });
+        searchField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(70, 70, 70)),
+                BorderFactory.createEmptyBorder(3, 6, 3, 6)));
+        JPanel searchRow = new JPanel(new BorderLayout());
+        searchRow.setOpaque(false);
+        searchRow.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        searchRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        searchRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        searchRow.add(searchField, BorderLayout.CENTER);
+        child.add(searchRow);
+
+        // Build sub-accordions; track wrapper → rows for search filtering.
+        // Each entry: Object[]{ JPanel row, String searchableText }
+        Map<JPanel, List<Object[]>> wrapperRows = new LinkedHashMap<>();
+        int totalCount = 0;
+
+        for (Map.Entry<String, List<GearItem>> entry : byRegion.entrySet()) {
+            List<GearItem> regionItems = entry.getValue();
+            if (regionItems.isEmpty()) continue;
+
+            String displayName = gearAreaDisplayName(entry.getKey());
+            JPanel subChild = newChildColumn();
+            List<Object[]> rowList = new ArrayList<>();
+
+            for (GearItem item : regionItems) {
+                String meta = buildGearMeta(item);
+                JPanel row = makeGearRow(item, meta);
+                subChild.add(row);
+                rowList.add(new Object[]{row, (item.getName() + " " + meta).toLowerCase()});
+                totalCount++;
+            }
+
+            JPanel subWrapper = buildCollapsible(displayName + " (" + regionItems.size() + ")", subChild);
+            subWrapper.setAlignmentX(Component.LEFT_ALIGNMENT);
+            wrapperRows.put(subWrapper, rowList);
+            child.add(subWrapper);
+            child.add(leftAlignedStrut(2));
         }
+
         if (items.isEmpty()) {
             child.add(emptyLabel("No gear loaded — run scraper."));
         }
 
+        // Wire search filter — hides non-matching rows and collapses empty regions.
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            private void filter() {
+                String raw = searchField.getText().trim();
+                String q = raw.equals(placeholder) ? "" : raw.toLowerCase();
+                for (Map.Entry<JPanel, List<Object[]>> e : wrapperRows.entrySet()) {
+                    JPanel wrapper = e.getKey();
+                    boolean anyVisible = false;
+                    for (Object[] rowEntry : e.getValue()) {
+                        JPanel row = (JPanel) rowEntry[0];
+                        boolean visible = q.isEmpty() || ((String) rowEntry[1]).contains(q);
+                        row.setVisible(visible);
+                        if (visible) anyVisible = true;
+                    }
+                    wrapper.setVisible(anyVisible);
+                }
+                child.revalidate();
+                child.repaint();
+            }
+            @Override public void insertUpdate(DocumentEvent e) { filter(); }
+            @Override public void removeUpdate(DocumentEvent e) { filter(); }
+            @Override public void changedUpdate(DocumentEvent e) { filter(); }
+        });
+
+        final int count = totalCount;
         return buildCollapsible("Gear (" + count + ")", child);
     }
 
     private static String gearAreaDisplayName(String region) {
-        if (region == null || region.isEmpty()) return "Starter Areas";
+        if (region == null || region.isEmpty()) return "Global";
         switch (region) {
             case "Kebos_and_Kourend": return "Kebos & Kourend";
             default: return region.replace("_", " ");
@@ -360,7 +454,7 @@ public class UnlockablesPanel extends JPanel {
         String safeTitle = escapeHtml(item.getName());
         String safeMeta = escapeHtml(meta);
         JLabel textLabel = new JLabel(
-                "<html><div style='width:130px'>"
+                "<html><div style='width:110px'>"
                         + "<b style='color:#DCDCDC'>" + safeTitle + "</b>"
                         + (safeMeta.isEmpty()
                                 ? ""
@@ -519,7 +613,7 @@ public class UnlockablesPanel extends JPanel {
         JPanel right = new JPanel();
         right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
         right.setOpaque(false);
-        right.setPreferredSize(new Dimension(68, 34));
+        right.setPreferredSize(new Dimension(53, 34));
 
         String toggleText;
         Color toggleColor;
@@ -580,7 +674,7 @@ public class UnlockablesPanel extends JPanel {
         String safeTitle = escapeHtml(title);
         String safeMeta = escapeHtml(effect);
         JLabel textLabel = new JLabel(
-                "<html><div style='width:125px'>"
+                "<html><div style='width:105px'>"
                         + "<b style='color:#DCDCDC'>" + safeTitle + "</b>"
                         + (safeMeta.isEmpty()
                                 ? ""
@@ -685,7 +779,7 @@ public class UnlockablesPanel extends JPanel {
         header.setBackground(SECTION_BG);
         header.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
-        header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        header.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         // Restore expansion state across rebuilds. Keyed by the first word of
@@ -694,27 +788,38 @@ public class UnlockablesPanel extends JPanel {
         final String sectionKey = firstWord(title);
         final boolean startExpanded = Boolean.TRUE.equals(sectionExpanded.get(sectionKey));
 
-        final JLabel chevron = new JLabel(startExpanded ? "\u25BC" : "\u25B6");
+        final JLabel chevron = new JLabel(startExpanded ? "\u25BC" : "\u25B6") {
+            @Override public boolean contains(int x, int y) { return false; }
+        };
         chevron.setForeground(META_FG);
         chevron.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
 
-        JLabel titleLabel = new JLabel(title);
+        // HTML label in CENTER so BorderLayout constrains its width and Swing
+        // wraps the text instead of overflowing the panel edge.
+        // contains() returns false so hit-testing falls through to the header
+        // panel, which holds the single toggle MouseListener.
+        JLabel titleLabel = new JLabel("<html>" + escapeHtml(title) + "</html>") {
+            @Override public boolean contains(int x, int y) { return false; }
+        };
         titleLabel.setForeground(HEADER_FG);
         titleLabel.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
 
-        JPanel left = new JPanel();
-        left.setLayout(new BoxLayout(left, BoxLayout.X_AXIS));
-        left.setOpaque(false);
-        left.add(chevron);
-        left.add(Box.createHorizontalStrut(6));
-        left.add(titleLabel);
+        JPanel chevronPanel = new JPanel() {
+            @Override public boolean contains(int x, int y) { return false; }
+        };
+        chevronPanel.setLayout(new BoxLayout(chevronPanel, BoxLayout.X_AXIS));
+        chevronPanel.setOpaque(false);
+        chevronPanel.add(chevron);
+        chevronPanel.add(Box.createHorizontalStrut(6));
 
-        header.add(left, BorderLayout.WEST);
+        header.add(chevronPanel, BorderLayout.WEST);
+        header.add(titleLabel, BorderLayout.CENTER);
         child.setVisible(startExpanded);
 
         wrapper.add(header);
         wrapper.add(child);
 
+        // Single listener on header — child components pass through via contains()=false.
         header.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
