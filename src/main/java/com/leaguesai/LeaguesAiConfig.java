@@ -96,4 +96,16 @@ public interface LeaguesAiConfig extends Config
     {
         return 200;
     }
+
+    @ConfigItem(
+        keyName = "leaguesMode",
+        name = "Leagues Mode",
+        description = "Enable Leagues VI mode. Disable for standard ironman planning.",
+        section = "apiSettings",
+        position = 4
+    )
+    default boolean leaguesMode()
+    {
+        return true;
+    }
 }

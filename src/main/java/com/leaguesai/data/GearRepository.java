@@ -42,6 +42,17 @@ public class GearRepository {
         Map<String, GearItem> loaded = tryLoadFromDb(dbFile);
         if (loaded.isEmpty()) {
             loaded = tryLoadFromClasspath();
+        } else {
+            // The DB items table doesn't store region — it's hand-authored in
+            // gear.json. Always overlay region (and any other json-only fields)
+            // from the classpath file so sub-accordions by region work correctly.
+            Map<String, GearItem> jsonItems = tryLoadFromClasspath();
+            for (Map.Entry<String, GearItem> e : jsonItems.entrySet()) {
+                GearItem dbItem = loaded.get(e.getKey());
+                if (dbItem != null && e.getValue().getRegion() != null) {
+                    dbItem.setRegion(e.getValue().getRegion());
+                }
+            }
         }
         this.itemsById = loaded;
     }
