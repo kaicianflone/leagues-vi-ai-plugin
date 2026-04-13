@@ -6,6 +6,7 @@ import lombok.Value;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A resolved composite goal: one high-level target (relic / area / pact) plus
@@ -47,6 +48,23 @@ public class CompositeGoal {
     /** Ordered task batch to execute. May be empty for PACT goals. */
     @Builder.Default
     List<Task> taskBatch = Collections.emptyList();
+
+    /**
+     * Pre-built steps for items resolved via {@link WikiItemLookup} — bypasses
+     * Task-based pipeline when the item has no dependency chain (shop items,
+     * NPC trades, etc.). Empty unless the ITEM goal resolved via wiki lookup.
+     */
+    @Builder.Default
+    List<PlannedStep> directSteps = Collections.emptyList();
+
+    /**
+     * Skilling steps from the OSRS skill calculator — present when an item is
+     * obtained by training a skill (smithing, crafting, fletching, etc.). Stored
+     * here so {@code ChatService} can surface them in the plan without creating
+     * synthetic Task objects.
+     */
+    @Builder.Default
+    List<PlannedStep> skillingSteps = Collections.emptyList();
 
     int pointsGap;
     int coveredBy;

@@ -40,7 +40,7 @@ public class PromptBuilder {
     public static String buildSystemPrompt(PlayerContext ctx,
                                            List<Task> relevantTasks,
                                            TaskRepository repo) {
-        return buildSystemPromptImpl(ctx, relevantTasks, repo, null, null);
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, null, null, false);
     }
 
     /**
@@ -48,7 +48,7 @@ public class PromptBuilder {
      */
     public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
                                            TaskRepository repo, List<GearItem> relevantGear) {
-        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, null);
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, null, false);
     }
 
     /**
@@ -59,7 +59,19 @@ public class PromptBuilder {
     public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
                                            TaskRepository repo, List<GearItem> relevantGear,
                                            java.util.List<String> selectedPersonas) {
-        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, selectedPersonas);
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, selectedPersonas, false);
+    }
+
+    /**
+     * Overload that accepts a {@code planJustCreated} flag. When {@code true}, the
+     * system prompt labels the plan as freshly built for this request so the LLM
+     * presents it as a new plan rather than saying "you already have a plan loaded."
+     */
+    public static String buildSystemPrompt(PlayerContext ctx, List<Task> relevantTasks,
+                                           TaskRepository repo, List<GearItem> relevantGear,
+                                           java.util.List<String> selectedPersonas,
+                                           boolean planJustCreated) {
+        return buildSystemPromptImpl(ctx, relevantTasks, repo, relevantGear, selectedPersonas, planJustCreated);
     }
 
     /**
@@ -69,12 +81,20 @@ public class PromptBuilder {
                                                 List<Task> relevantTasks,
                                                 TaskRepository repo,
                                                 List<GearItem> relevantGear,
-                                                java.util.List<String> selectedPersonas) {
+                                                java.util.List<String> selectedPersonas,
+                                                boolean planJustCreated) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
+        // TODO(post-launch): refactor into LeaguesContextBuilder + IronmanContextBuilder
+        if (ctx.isLeaguesMode()) {
+            sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
+        } else {
+            sb.append("You are an expert OSRS Ironman planner.\n\n");
+        }
 
-        sb.append(buildIronmanDoctrine(selectedPersonas));
-        sb.append(buildEchoBossesSection());
+        sb.append(buildIronmanDoctrine(selectedPersonas, ctx.isLeaguesMode()));
+        if (ctx.isLeaguesMode()) {
+            sb.append(buildEchoBossesSection());
+        }
 
         sb.append("## How To Help The Player\n");
         sb.append("1. **Read what you already know.** The Player State, Skills, Inventory, ");
@@ -103,18 +123,28 @@ public class PromptBuilder {
         // Player State
         sb.append("## Player State\n");
         sb.append("- Combat Level: ").append(ctx.getCombatLevel()).append("\n");
-        sb.append("- League Points: ").append(ctx.getLeaguePoints()).append("\n");
+        if (ctx.isLeaguesMode()) {
+            sb.append("- League Points: ").append(ctx.getLeaguePoints()).append("\n");
+        }
         if (ctx.getLocation() != null) {
             sb.append("- Location: ").append(ctx.getLocation().toString()).append("\n");
         }
         sb.append("\n");
 
-        // Skills
+        // Skills — include actual XP so the model doesn't hallucinate XP table values
         sb.append("## Skills\n");
         if (ctx.getLevels() != null && !ctx.getLevels().isEmpty()) {
+            Map<Skill, Integer> xpMap = ctx.getXp();
             for (Map.Entry<Skill, Integer> entry : ctx.getLevels().entrySet()) {
                 sb.append("- ").append(entry.getKey().name()).append(": ")
-                        .append(entry.getValue()).append("\n");
+                        .append(entry.getValue());
+                if (xpMap != null) {
+                    Integer xp = xpMap.get(entry.getKey());
+                    if (xp != null) {
+                        sb.append(" (").append(String.format("%,d", xp)).append(" xp)");
+                    }
+                }
+                sb.append("\n");
             }
         }
         sb.append("\n");
@@ -152,8 +182,18 @@ public class PromptBuilder {
         List<PlannedStep> plan = ctx.getCurrentPlan();
         if (plan != null && !plan.isEmpty()) {
             int limit = Math.min(20, plan.size());
-            sb.append("## Active Plan (").append(plan.size()).append(" tasks total, showing first ")
-                    .append(limit).append(")\n");
+            if (planJustCreated) {
+                // Plan was built in response to THIS message — tell the LLM it's new.
+                sb.append("## Plan Just Built For This Request (").append(plan.size())
+                        .append(" steps)\n");
+                sb.append("**IMPORTANT: You JUST built this plan in response to the player's current ");
+                sb.append("message. Present it naturally as something you just created — ");
+                sb.append("do NOT say \"you already have a plan\" or \"your plan is loaded\". ");
+                sb.append("Walk the player through it as a fresh response.**\n");
+            } else {
+                sb.append("## Active Plan (").append(plan.size()).append(" tasks total, showing first ")
+                        .append(limit).append(")\n");
+            }
             for (int i = 0; i < limit; i++) {
                 PlannedStep step = plan.get(i);
                 String instruction = step.getInstruction() != null ? step.getInstruction() : "(no instruction)";
@@ -387,13 +427,25 @@ public class PromptBuilder {
      * Returns the coaching doctrine block filtered to {@code selectedPersonas}.
      * Pass {@code null} or an empty list to include all personas (backward compat).
      */
+    /** Backward-compat overload — defaults to leagues mode true. */
     public static String buildIronmanDoctrine(java.util.List<String> selectedPersonas) {
+        return buildIronmanDoctrine(selectedPersonas, true);
+    }
+
+    public static String buildIronmanDoctrine(java.util.List<String> selectedPersonas, boolean leaguesMode) {
         boolean all = selectedPersonas == null || selectedPersonas.isEmpty();
         java.util.Set<String> active = all ? null : new java.util.HashSet<>(selectedPersonas);
 
         StringBuilder sb = new StringBuilder();
         sb.append("## Coaching Personas\n");
-        sb.append("You are coaching an OSRS Leagues VI (Demonic Pacts) player. ");
+        if (leaguesMode) {
+            sb.append("You are coaching an OSRS Leagues VI (Demonic Pacts) player. ");
+        } else {
+            sb.append("You are coaching a standard OSRS Ironman player. ");
+            sb.append("There are no leagues, relics, pacts, echo bosses, or league points. ");
+            sb.append("All advice must be standard OSRS ironman content only. ");
+            sb.append("Never reference leagues mechanics. ");
+        }
         sb.append("The following expert voices are active — apply each one's lens when relevant.\n\n");
 
         if (all || active.contains("points_chaser")) {
@@ -426,8 +478,12 @@ public class PromptBuilder {
         }
 
         if (all || active.contains("theorist")) {
-            sb.append("**The Theorist** — numbers drive every decision. Names the exact DPS increase from ");
-            sb.append("a relic, the XP multiplier from a pact, the break-even point for a gear grind. ");
+            sb.append("**The Theorist** — numbers drive every decision. ");
+            if (leaguesMode) {
+                sb.append("Names the exact DPS increase from a relic, the XP multiplier from a pact, the break-even point for a gear grind. ");
+            } else {
+                sb.append("Names exact XP rates, DPS comparisons, and break-even points for gear grinds. ");
+            }
             sb.append("When two approaches seem equivalent, works out which is strictly better and by how much. ");
             sb.append("If a tradeoff is genuinely close, says so and lists the deciding variable.\n\n");
         }
@@ -456,7 +512,12 @@ public class PromptBuilder {
         if (all || active.contains("skill_spec")) {
             sb.append("**Skill Spec (number-cruncher)** — treats every skill level as a resource. When the player ");
             sb.append("needs a level for a task, names the fastest ironman method to get there and the XP required. ");
-            sb.append("Optimizes skilling routes to double up on league tasks. Tracks skill milestones that unlock ");
+            if (leaguesMode) {
+                sb.append("Optimizes skilling routes to double up on league tasks. ");
+            } else {
+                sb.append("Optimizes skilling routes to double up on content goals. ");
+            }
+            sb.append("Tracks skill milestones that unlock ");
             sb.append("new task categories and flags when leveling a skill opens a cluster of high-value tasks.\n\n");
         }
 
