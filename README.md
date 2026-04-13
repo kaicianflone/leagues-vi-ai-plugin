@@ -194,6 +194,7 @@ leagues-vi-ai-plugin/
 │   ├── agent/                    ChatService, GoalPlanner, GoalSpecParser,
 │   │                             BuildExpander, ProximityOptimizer,
 │   │                             ItemDependencyGraph, ObtainMethod,
+│   │                             WikiItemLookup, SkillingStepBuilder,
 │   │                             PromptBuilder, PersonaReviewer, LLM clients
 │   ├── overlay/                  Minimap/Arrow/Path/WorldMap overlays (QH ports)
 │   └── ui/                       ChatPanel, GoalsPanel, BuildsPanel,
@@ -203,18 +204,21 @@ leagues-vi-ai-plugin/
 │   │                             (slots, skill reqs, task overrides for launch-day reliability)
 │   ├── builds.json               5 seeded build archetypes
 │   └── leagues-vi-tasks.db       Bundled DB snapshot (seeded on first install)
-├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4) — 40 test files
+├── src/test/java/com/leaguesai/  Unit tests (Mockito + JUnit 4) — 46 test files
 ├── scraper/                      Standalone scraper subproject
 │   └── src/main/java/com/leaguesai/scraper/
 │       ├── WikiScraper.java            Demonic Pacts League task scraper
 │       ├── DemonicPactsScraper.java    Leagues VI relics/areas/pacts scraper
 │       ├── ItemDependencyScraper.java  MediaWiki Lua module parser for item deps
 │       ├── TaskItemExtractor.java      Extracts equipment targets from task text
-│       ├── ItemStatsScraper.java       Resolves item wiki IDs + stats
+│       ├── ItemStatsScraper.java       Resolves item wiki IDs + stats via Infobox_Bonuses
+│       ├── LocationResolver.java       Maps task locations to WorldPoints
+│       ├── EmbeddingGenerator.java     OpenAI embeddings for vector index population
 │       ├── HtmlParser.java             Jsoup-based wiki parsing
 │       ├── SqliteWriter.java           UPSERT writer for all tables
 │       └── TaskNormalizer.java         Skill name aliases, difficulty normalisation
-├── scraper/scrape.sh             One-shot: runs both scrapers into the same DB
+├── scraper/scrape.sh             One-shot: runs all scrapers into the same DB
+├── scraper/scrape-meta.sh        Item stats scraper (Infobox_Bonuses transclusion query)
 ├── CLAUDE.md                     Project-specific rules and Phase 2 TODO
 └── README.md                     You are here
 ```
@@ -230,13 +234,18 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home ./gradl
 # Launch the plugin in dev RuneLite
 ./gradlew runPlugin
 
-# Re-scrape the wiki (writes to ~/.runelite/leagues-ai/data/leagues-vi-tasks.db)
+# Re-scrape tasks/relics/areas/pacts from the wiki
 ./scraper/scrape.sh
+
+# Re-scrape item stats (Infobox_Bonuses transclusion — run after scrape.sh)
+./scraper/scrape-meta.sh
 ```
 
 **Test policy:** overlays ported from Quest Helper have full Mockito-backed tests that verify actual draw calls (`graphics.draw(any(Shape.class))`, `setColor`, `setStroke`). Null-return assertions are coverage theater and not accepted. See `CLAUDE.md` for the full test discipline.
 
 **Debug logging is intentionally loud** for the first couple weeks post-launch so friends can shake out issues. Don't strip the `MINIMAP DEBUG` or `CODEX DEBUG request body:` lines.
+
+Deferred work and post-launch tasks are tracked in [TODOS.md](TODOS.md). Project-specific coding rules (overlay parity, test discipline, DI requirements) are in [CLAUDE.md](CLAUDE.md).
 
 ---
 
