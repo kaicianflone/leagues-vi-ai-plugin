@@ -309,3 +309,4 @@ See `CLAUDE.md` for the full Phase 2 launch-day task list.
 - [Quest Helper](https://github.com/Zoinkwiz/quest-helper) by Zoinkwiz for the overlay reference implementation.
 - The OSRS Wiki editors for maintaining the data this plugin depends on.
 - B0aty, Faux, and the UIM community for the coaching style the persona reviewer mimics.
+- Special thanks to Picklez. Good OSRS player. Great friend. Absolute boss at Chambers.
