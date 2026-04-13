@@ -10,9 +10,9 @@ A RuneLite plugin that acts as an AI-powered coach for Old School RuneScape's **
 
 - **Builds system.** Load a curated build ("Melee Bosser", "Ranged PvM DPS", "Skiller", etc.) from the Goals tab. The planner automatically chains every relic/area/pact/gear-task prerequisite. Export builds as JSON files to share with friends via Discord; import with one click.
 - **Chat coach.** Ask "what should I do next?", "how do I unlock Grimoire?", or "plan out all the Karamja medium tasks" — the assistant reads your live inventory, levels, equipment, completed tasks, and unlocked areas, then answers with a real plan built from a local task database, not a hallucination.
-- **Crafting goal planner.** Type "make a staff of air", "smith rune platebody", or "brew prayer potion" — the plugin looks up the recipe on the OSRS wiki, builds a material-gather plan, and walks you to each shop or bank step with overlays. Plan steps auto-advance when you pick up the target item.
-- **Chained goal planner.** Click "Set as goal" on any relic, area, or demonic pact in the side panel. The planner computes the league-point gap between your current balance and the target's unlock cost, filters tasks by what you can actually do (skill gates, area unlocks, quest prereqs), and returns a specific batch of tasks ordered by points-per-effort.
-- **Ironman item dependency planner.** Type "get rune platebody" or "I need dragon scimitar" in chat — the plugin traces every ingredient, drop source, and skill gate back through an in-memory BFS graph (`ItemDependencyGraph`), then surfaces the task batch that actually gets you the item with no wiki tab-switching required.
+- **Crafting goal planner.** Type "make a staff of air", "smith rune platebody", or "brew prayer potion" — the plugin fetches the recipe from the OSRS wiki at plan time (live HTTP, requires network), builds a material-gather plan, and walks you to each shop or bank step with overlays. Plan steps auto-advance when you pick up the target item. Use this when you know exactly what you want to craft; for "get me a rune platebody" intent without a crafting verb, the ironman dependency planner fires instead.
+- **Chained goal planner.** Click "Set as goal" on any relic, area, or demonic pact in the side panel. The planner computes the league-point gap between your current balance and the target's unlock cost, filters tasks by what you can actually do (skill gates, area unlocks, quest prereqs), and returns a specific batch of tasks ordered by points-per-effort. Note: until the wiki publishes real unlock costs on 2026-04-15, all costs are 0 and the planner returns the top-10 highest-value achievable tasks as a fallback.
+- **Ironman item dependency planner.** Type "get rune platebody" or "I need dragon scimitar" in chat — the plugin traces every ingredient, drop source, and skill gate back through an in-memory BFS graph (`ItemDependencyGraph`), then surfaces the task batch that actually gets you the item with no wiki tab-switching required. Use this for acquisition goals; the crafting planner fires on explicit crafting verbs ("smith", "make", "brew", etc.).
 - **Leagues / ironman mode toggle.** Switch between Leagues and ironman coaching in Settings. Ironman mode hides leagues-only personas and disables relic/area/pact goal routing.
 - **Quest Helper-style overlays.** Once a plan is loaded, the plugin activates minimap arrows, a world arrow, path lines, and world map markers for the active step. Ported 1:1 from [Quest Helper](https://github.com/Zoinkwiz/quest-helper) under BSD-2-Clause. Tile, NPC, object, and ground-item highlights exist as hand-rolled placeholders pending a proper QH port (see `CLAUDE.md`).
 - **Adversarial plan review.** Every generated plan is reviewed by three LLM personas (B0aty / Faux / a top UIM player) who each pick the single biggest flaw in the plan from their lens. Output shows as a banner at the top of the Goals tab.
@@ -213,7 +213,7 @@ leagues-vi-ai-plugin/
 │       ├── TaskItemExtractor.java      Extracts equipment targets from task text
 │       ├── ItemStatsScraper.java       Resolves item wiki IDs + stats via Infobox_Bonuses
 │       ├── LocationResolver.java       Maps task locations to WorldPoints
-│       ├── EmbeddingGenerator.java     OpenAI embeddings for vector index population
+│       ├── EmbeddingGenerator.java     OpenAI embeddings for vector index (skipped unless OPENAI_API_KEY set; not required for core functionality)
 │       ├── HtmlParser.java             Jsoup-based wiki parsing
 │       ├── SqliteWriter.java           UPSERT writer for all tables
 │       └── TaskNormalizer.java         Skill name aliases, difficulty normalisation
@@ -254,7 +254,7 @@ Deferred work and post-launch tasks are tracked in [TODOS.md](TODOS.md). Project
 - **`~/.codex/auth.json`** is consulted first. If present, `CodexOauthClient` talks to `chatgpt.com/backend-api/codex/responses` using your ChatGPT Plus credentials. Token refresh on 401 is automatic.
 - **Settings tab** holds an `openaiApiKey` field as the fallback. Stored via RuneLite's config system (masked, not committed). Requests go to `api.openai.com/v1/chat/completions`.
 
-The Settings tab hides itself once either auth mode is established. Chat and Goals tabs are the only ones visible in normal operation.
+The Settings tab in the navigation bar hides after auth — Chat and Goals are the visible tabs in normal operation. Settings is still always accessible via the ⚙ gear icon in the top-right corner. The leagues/ironman mode toggle lives there.
 
 ---
 
@@ -266,6 +266,7 @@ The Settings tab hides itself once either auth mode is established. Chat and Goa
 - **`GoalStore.isUnlocked`** is hardcoded `false` for everything. Auto-detecting in-game unlock state via varbits is a post-launch task.
 - **Auto-completed quests** from the Leagues VI overview aren't wired into the planner's prereq checking yet.
 - **Gear task linking** depends on `tasks.target_items` being populated. The bundled DB has this from the scraper run, but if a gear item's granting tasks are missing, BuildExpander falls back to goals-only mode with a banner.
+- **Crafting goal planner requires network at plan time.** `WikiItemLookup` fetches wikitext from `oldschool.runescape.wiki` when you trigger a CRAFT goal. If the wiki is down or rate-limits you, the plan will fail with an error message in chat. All other plugin features work offline (task DB is local SQLite).
 
 See `CLAUDE.md` for the full Phase 2 launch-day task list.
 
