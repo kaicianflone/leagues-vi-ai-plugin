@@ -53,6 +53,16 @@ When a subagent touches any of the above, it MUST port from Quest Helper rather 
 - Scraper: `./scraper/scrape.sh` (no API key needed; embeddings are skipped).
 - SQLite database lives at `~/.runelite/leagues-ai/data/leagues-vi-tasks.db`. Regenerate by re-running the scraper.
 
+## Post-change verification workflow
+
+**After every feature or fix, you must relaunch dev RuneLite to load the changes.**
+
+1. Kill any running dev RuneLite instance first: `pkill -f "runelite" || true`
+2. Then start fresh: `JAVA_HOME=/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home ./gradlew runPlugin`
+3. Once RuneLite opens, manually enable the plugin in the Plugin Hub / sidebar if it isn't already active.
+
+Never assume the change works without actually opening RuneLite and verifying it. The build step alone is not sufficient.
+
 ## Authentication
 
 The plugin supports two LLM auth modes, auto-detected:
