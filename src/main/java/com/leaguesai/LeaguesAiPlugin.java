@@ -17,6 +17,7 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -49,6 +50,7 @@ import java.util.stream.Collectors;
 public class LeaguesAiPlugin extends Plugin {
 
     @Inject private Client client;
+    @Inject private ClientThread clientThread;
     @Inject private LeaguesAiConfig config;
     @Inject private ConfigManager configManager;
     @Inject private ClientToolbar clientToolbar;
@@ -219,7 +221,9 @@ public class LeaguesAiPlugin extends Plugin {
             leagueStatusMonitor.setGoalStore(goalStore);
             wikiSyncTaskLoader.setContextAssembler(contextAssembler);
             wikiSyncTaskLoader.setTaskRepository(taskRepo);
-            wikiSyncTaskLoader.loadCompletedTasks(); // fetch once DB is ready
+            // loadCompletedTasks() must run on the game thread (calls client API).
+            // loadDatabaseAsync() runs on llmExecutor, so marshal back via clientThread.
+            clientThread.invoke(wikiSyncTaskLoader::loadCompletedTasks);
             vectorIndex = new VectorIndex(embeddings);
             ItemDependencyGraph itemDependencyGraph = new ItemDependencyGraph(dbFile);
             itemDependencyGraph.loadFromDb();
