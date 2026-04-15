@@ -5,6 +5,35 @@ All notable changes to the Leagues VI AI Plugin. Format loosely follows
 pre-launch (2026-04-15); the first tagged release will be cut on or after
 launch day.
 
+## [0.5.1.0] — 2026-04-15 — Threading fixes, account reset, league points, relic map, PromptBuilder refactor
+
+### Fixed
+
+- **WikiSyncTaskLoader threading** — `client.getLocalPlayer()` was called from a background
+  executor thread (RuneLite threading violation). Now captured on the calling game thread
+  before `executor.submit()`. Removed the 10-attempt retry loop that was masking this bug.
+  Also fixed a second call site in `loadDatabaseAsync()` (background thread) by marshalling
+  via `ClientThread.invoke()`.
+- **Account contamination on login switch** — `PlayerContextAssembler.completedTasks` and
+  `unlockedAreas` were never cleared between logins. Added `reset()` and call it on
+  `LOGGED_IN` before WikiSync reloads, so a second login never sees stale state from the
+  previous account.
+- **League points** — wired `VarPlayerID.LEAGUE_POINTS_CURRENCY` (VarPlayer 2613) into
+  `PlayerContextAssembler.assembleOnClientThread()` via `client.getVarpValue()`. Also logged
+  in `LeagueStatusMonitor.initialize()` so the first-login value is visible in the log.
+- **Relic index map design** — flat `Map<Integer, String>` keyed by varbit value could not
+  distinguish per-slot values (each slot uses 0/1/2/3 independently). Replaced with
+  `Map<Integer, Map<Integer, String>>` keyed by `(slotIndex, value)`. Map is intentionally
+  empty until live relic varbit values are confirmed from in-game data.
+
+### Changed
+
+- **PromptBuilder refactor** — extracted `ModeContextBuilder` interface with
+  `LeaguesContextBuilder` and `IronmanContextBuilder` implementations. Eliminated all
+  `if (leaguesMode)` branches from `buildSystemPromptImpl()`. No behavior change.
+
+---
+
 ## [0.5.0.0] — 2026-04-15 — Phase 2 Launch Day: Task Browser, Unlock Detection, WikiSync
 
 Browse all 1,422 Demonic Pacts League tasks directly in the panel — filter by area,

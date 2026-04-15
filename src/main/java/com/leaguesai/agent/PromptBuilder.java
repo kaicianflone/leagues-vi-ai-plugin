@@ -84,17 +84,13 @@ public class PromptBuilder {
                                                 java.util.List<String> selectedPersonas,
                                                 boolean planJustCreated) {
         StringBuilder sb = new StringBuilder();
-        // TODO(post-launch): refactor into LeaguesContextBuilder + IronmanContextBuilder
-        if (ctx.isLeaguesMode()) {
-            sb.append("You are an expert OSRS Leagues VI (Demonic Pacts) coach.\n\n");
-        } else {
-            sb.append("You are an expert OSRS Ironman planner.\n\n");
-        }
+        ModeContextBuilder modeBuilder = ctx.isLeaguesMode()
+                ? new LeaguesContextBuilder()
+                : new IronmanContextBuilder();
 
+        sb.append(modeBuilder.buildIntro());
         sb.append(buildIronmanDoctrine(selectedPersonas, ctx.isLeaguesMode()));
-        if (ctx.isLeaguesMode()) {
-            sb.append(buildEchoBossesSection());
-        }
+        sb.append(modeBuilder.buildExtraSection());
 
         sb.append("## How To Help The Player\n");
         sb.append("1. **Read what you already know.** The Player State, Skills, Inventory, ");
@@ -123,9 +119,7 @@ public class PromptBuilder {
         // Player State
         sb.append("## Player State\n");
         sb.append("- Combat Level: ").append(ctx.getCombatLevel()).append("\n");
-        if (ctx.isLeaguesMode()) {
-            sb.append("- League Points: ").append(ctx.getLeaguePoints()).append("\n");
-        }
+        sb.append(modeBuilder.buildPlayerStateExtras(ctx));
         if (ctx.getLocation() != null) {
             sb.append("- Location: ").append(ctx.getLocation().toString()).append("\n");
         }

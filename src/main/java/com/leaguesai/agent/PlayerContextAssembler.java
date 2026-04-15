@@ -8,6 +8,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
 
@@ -88,7 +89,7 @@ public class PlayerContextAssembler {
                 .completedTasks(getCompletedTasksSnapshot())
                 .unlockedAreas(getUnlockedAreasSnapshot())
                 .location(locationMonitor.getCurrentLocation())
-                .leaguePoints(0) // TODO: requires unknown varbit
+                .leaguePoints(client.getVarpValue(VarPlayerID.LEAGUE_POINTS_CURRENCY))
                 .combatLevel(combatLevel)
                 .currentGoal(currentGoal)
                 .currentPlan(new ArrayList<>(currentPlan))
@@ -155,6 +156,16 @@ public class PlayerContextAssembler {
     // -------------------------------------------------------------------------
     // Mutators
     // -------------------------------------------------------------------------
+
+    /**
+     * Clears per-session state (completed tasks, unlocked areas). Call this on
+     * LOGGED_IN before WikiSync runs so a logout/relog or account switch starts
+     * with a clean slate rather than carrying over the previous session's state.
+     */
+    public synchronized void reset() {
+        completedTasks.clear();
+        unlockedAreas.clear();
+    }
 
     public synchronized Set<String> getCompletedTasksSnapshot() {
         return new HashSet<>(completedTasks);

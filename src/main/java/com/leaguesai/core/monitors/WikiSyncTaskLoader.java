@@ -77,35 +77,31 @@ public class WikiSyncTaskLoader {
 
     /**
      * Fire-and-forget: fetches completed tasks on a background thread.
-     * If the local player isn't ready yet, retries up to 10 times with a 2 s
-     * delay so the call survives being made immediately after LOGGED_IN fires.
      *
-     * <p>Profile type is captured on the game thread before the background fetch.
-     * WikiSync stores data keyed by (username, profileType.name()), so for
-     * Demonic Pacts League the path is {@code .../DEMONIC_PACTS_LEAGUE}.
+     * <p>Must be called from the game thread (e.g. from {@code onGameStateChanged}).
+     * Player name and profile type are captured here on the calling thread before
+     * handing off to the executor — calling {@code client.*} from a background
+     * thread is a RuneLite threading violation and can return stale data or crash.
      */
     public void loadCompletedTasks() {
-        // Capture profile type now (safe on the client thread)
+        // Capture both values on the calling (game) thread before executor.submit().
+        Player player = client.getLocalPlayer();
+        String playerName = player != null ? player.getName() : null;
+        if (playerName == null) {
+            log.warn("WikiSyncTaskLoader: local player not available at login, skipping WikiSync fetch");
+            return;
+        }
+
         RuneScapeProfileType profile;
         try {
             profile = RuneScapeProfileType.getCurrent(client);
         } catch (Exception e) {
             profile = RuneScapeProfileType.STANDARD;
         }
+        final String playerNameFinal = playerName;
         final RuneScapeProfileType profileFinal = profile;
 
-        executor.submit(() -> {
-            for (int attempt = 0; attempt < 10; attempt++) {
-                Player player = client.getLocalPlayer();
-                if (player != null && player.getName() != null) {
-                    fetchAndMark(player.getName(), profileFinal);
-                    return;
-                }
-                log.info("WikiSyncTaskLoader: player not ready, retry {}/10 in 2s", attempt + 1);
-                try { Thread.sleep(2000); } catch (InterruptedException ie) { return; }
-            }
-            log.warn("WikiSyncTaskLoader: player never became available, giving up");
-        });
+        executor.submit(() -> fetchAndMark(playerNameFinal, profileFinal));
     }
 
     private void fetchAndMark(String username, RuneScapeProfileType profile) {

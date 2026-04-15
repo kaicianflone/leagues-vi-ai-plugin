@@ -4,6 +4,7 @@ import com.leaguesai.data.GoalStore;
 import net.runelite.api.Client;
 import net.runelite.api.Varbits;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -91,19 +93,21 @@ public class LeagueStatusMonitor {
     };
 
     /**
-     * Maps varbit value (relic index) → relic id as stored in the DB.
-     * Value 0 = no relic chosen for this tier. Unknown values are logged.
+     * Maps (slotIndex → (varbitValue → relicId)) for relic unlock detection.
      *
-     * Demonic Pacts League has 3 relics per tier (8 tiers × 3 options).
-     * Indices within a tier: 1, 2, 3. The relic id is the lowercase name slug
-     * from the scraper (e.g. "dragon_slayer").
+     * Relic varbits are tier-local: each of the 8 slots stores 0/1/2/3 meaning
+     * "no relic / first option / second option / third option". A flat map keyed
+     * only on value cannot distinguish slot 0 value 1 from slot 1 value 1 — they
+     * are different relics. This nested map keys first on slot index, then on value.
      *
-     * This map MUST be verified against live game data on launch day.
-     * The structure below is a placeholder — populate from the DB once live.
+     * Intentionally empty for launch day — relic varbit index values are not yet
+     * confirmed from live game data. Populate once verified:
+     *   Map&lt;Integer, String&gt; tier0 = new HashMap&lt;&gt;();
+     *   tier0.put(1, "relic_tier1_option1"); // fill from live data
+     *   RELIC_SLOT_MAP.put(0, tier0);
      */
-    private static final Map<Integer, String> RELIC_INDEX_TO_ID = new HashMap<>();
-    // Intentionally empty for launch day — relic varbit index values are not yet confirmed.
-    // Populate once live game data is verified: RELIC_INDEX_TO_ID.put(index, "relic_id").
+    private static final Map<Integer, Map<Integer, String>> RELIC_SLOT_MAP = new HashMap<>();
+    // No entries yet — populated after live relic varbit values are confirmed.
 
     private final Client client;
     private final EventBus eventBus;
@@ -156,6 +160,9 @@ public class LeagueStatusMonitor {
 
         int totalTasks = client.getVarbitValue(VarbitID.LEAGUE_TOTAL_TASKS_COMPLETED);
         log.info("LeagueStatusMonitor: LEAGUE_TOTAL_TASKS_COMPLETED = {}", totalTasks);
+
+        int leaguePoints = client.getVarpValue(VarPlayerID.LEAGUE_POINTS_CURRENCY);
+        log.info("LeagueStatusMonitor: league points (spendable) = {}", leaguePoints);
     }
 
     @Subscribe
@@ -197,14 +204,15 @@ public class LeagueStatusMonitor {
 
     private void handleRelicValue(int slot, int value) {
         if (value == 0) return; // 0 = no relic chosen
-        String relicId = RELIC_INDEX_TO_ID.get(value);
+        String relicId = RELIC_SLOT_MAP.getOrDefault(slot, Collections.emptyMap()).get(value);
         if (relicId != null) {
             log.info("LeagueStatusMonitor: relic unlocked — slot={} value={} id={}", slot, value, relicId);
             if (goalStore != null) goalStore.markUnlocked(relicId);
         } else {
-            // Not an error — RELIC_INDEX_TO_ID is intentionally sparse until
-            // populated from live game data. Log at INFO level for day-1 mapping.
-            log.info("LeagueStatusMonitor: relic value {} in slot {} (no id mapping yet)", value, slot);
+            // Not an error — RELIC_SLOT_MAP is intentionally empty until populated
+            // from live game data. Log at INFO so day-1 output captures slot/value
+            // pairs needed to fill in the map.
+            log.info("LeagueStatusMonitor: relic slot={} value={} (no id mapping yet)", slot, value);
         }
     }
 }
