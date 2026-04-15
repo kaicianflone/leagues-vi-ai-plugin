@@ -279,6 +279,10 @@ public class ChatService {
 
         String lower = userMessage.toLowerCase().trim();
 
+        // Manual completion marking: "I already did X", "mark X as done", etc.
+        // Runs before planner trigger and short-circuits so the LLM doesn't also respond.
+        if (maybeMarkCompleted(lower)) return;
+
         // Trigger phrases — covers explicit slash commands, "plan ..." prefix,
         // and natural-language commit phrasings a player might use after the AI
         // has proposed a plan in conversation. The planner is fuzzy enough that
@@ -432,7 +436,8 @@ public class ChatService {
                     // and ordered by points-per-effort. Skip DAG expansion.
                     sorted = targets;
                 } else {
-                    Set<String> completed = new HashSet<>();
+                    Set<String> completed = ctxForParser.getCompletedTasks() != null
+                            ? ctxForParser.getCompletedTasks() : new HashSet<>();
                     List<Task> dag = goalPlanner.buildDag(targets, completed);
                     try {
                         sorted = goalPlanner.topologicalSort(dag);
@@ -553,14 +558,54 @@ public class ChatService {
     }
 
     /**
-     * Convert an ordered list of {@link Task}s into {@link PlannedStep}s with
-     * {@link com.leaguesai.overlay.OverlayData} populated from scraped task data.
-     * Steps with a null location still appear in the plan but have overlays
-     * disabled ({@code showArrow/showMinimap/showWorldMap = false}).
-     *
-     * <p>Static so {@code LeaguesAiPlugin.activateBuild} can share the same
-     * conversion logic without duplicating the stream.
+     * Detects manual task-completion phrases like "I already did pet xolo",
+     * "mark pet xolo as done", "I've completed pet xolo".
+     * Looks up the task by name (case-insensitive substring match) and calls
+     * {@code contextAssembler.markTaskCompleted} for each match found.
+     * Returns true if a completion phrase was detected (suppresses planner trigger).
      */
+    private boolean maybeMarkCompleted(String lower) {
+        boolean isCompletionPhrase = false;
+        String remainder = null;
+
+        String[] prefixes = {
+            "i already did ", "i already completed ", "i already finished ",
+            "i've already done ", "i've already completed ", "i've completed ",
+            "i've done ", "i have done ", "i have completed ",
+            "mark ", "i already have ", "already did ", "already completed ",
+            "skip ", "remove "
+        };
+        for (String prefix : prefixes) {
+            if (lower.startsWith(prefix)) {
+                isCompletionPhrase = true;
+                remainder = lower.substring(prefix.length()).trim();
+                // Strip trailing "as done", "done", "from plan", "from the plan"
+                remainder = remainder.replaceAll("\\s+(as done|done|from plan|from the plan)$", "").trim();
+                break;
+            }
+        }
+
+        if (!isCompletionPhrase || remainder == null || remainder.isEmpty()) return false;
+
+        List<Task> all = taskRepo.getAllTasks();
+        if (all == null) return false;
+
+        List<String> matched = new ArrayList<>();
+        final String rem = remainder;
+        for (Task t : all) {
+            if (t.getName() != null && t.getName().toLowerCase().contains(rem)) {
+                contextAssembler.markTaskCompleted(t.getId());
+                matched.add(t.getName());
+            }
+        }
+        if (!matched.isEmpty()) {
+            log.info("Manual completion: marked {} tasks done: {}", matched.size(), matched);
+            return true; // suppress planner trigger — completion handled
+        }
+        log.info("Manual completion: no task matched '{}' — passing to LLM", rem);
+        return false; // nothing matched: let the LLM respond normally
+    }
+
     public static List<PlannedStep> buildSteps(List<Task> tasks) {
         return tasks.stream()
                 .map(t -> {
@@ -570,21 +615,28 @@ public class ChatService {
                     if (t.getTargetObjects() != null) t.getTargetObjects().forEach(o -> objIds.add(o.getId()));
                     List<Integer> itemIds = new ArrayList<>();
                     if (t.getTargetItems() != null) t.getTargetItems().forEach(i -> itemIds.add(i.getId()));
+
+                    // Precise location from scraper, or area hub as general waypoint.
+                    // targetTile drives tile highlight — only set when precise (hub is too vague).
+                    // destination drives proximity sorting and overlay arrows (hub is fine here).
+                    net.runelite.api.coords.WorldPoint precise = t.getLocation();
+                    net.runelite.api.coords.WorldPoint dest = AreaHubs.resolve(precise, t.getArea());
+
                     com.leaguesai.overlay.OverlayData overlayData =
                             com.leaguesai.overlay.OverlayData.builder()
-                                    .targetTile(t.getLocation())
+                                    .targetTile(precise)          // precise only — don't highlight a hub tile
                                     .targetNpcIds(npcIds)
                                     .targetObjectIds(objIds)
                                     .targetItemIds(itemIds)
                                     .pathPoints(Collections.emptyList())
                                     .widgetIds(Collections.emptyList())
-                                    .showArrow(t.getLocation() != null)
-                                    .showMinimap(t.getLocation() != null)
-                                    .showWorldMap(t.getLocation() != null)
+                                    .showArrow(dest != null)      // arrow toward hub when no precise loc
+                                    .showMinimap(dest != null)
+                                    .showWorldMap(dest != null)
                                     .build();
                     return PlannedStep.builder()
                             .task(t)
-                            .destination(t.getLocation())
+                            .destination(dest)                    // hub fallback for proximity math
                             .instruction(t.getName())
                             .overlayData(overlayData)
                             .build();

@@ -30,13 +30,14 @@ public class OverlayControllerTest {
     @Mock private PathOverlay path;
     @Mock private WidgetOverlay widget;
     @Mock private RequiredItemsOverlay requiredItems;
+    @Mock private StepInstructionOverlay stepInstruction;
 
     private OverlayController controller;
 
     @Before
     public void setUp() {
         MockitoAnnotations.openMocks(this);
-        controller = new OverlayController(tile, arrow, npc, object, item, minimap, worldMap, path, widget, requiredItems);
+        controller = new OverlayController(tile, arrow, npc, object, item, minimap, worldMap, path, widget, requiredItems, stepInstruction);
     }
 
     @Test
@@ -52,6 +53,7 @@ public class OverlayControllerTest {
         verify(path).clear();
         verify(widget).clear();
         verify(requiredItems).clear();
+        verify(stepInstruction).clear();
     }
 
     @Test
