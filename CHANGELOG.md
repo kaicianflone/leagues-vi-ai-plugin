@@ -5,6 +5,67 @@ All notable changes to the Leagues VI AI Plugin. Format loosely follows
 pre-launch (2026-04-15); the first tagged release will be cut on or after
 launch day.
 
+## [0.5.0.0] — 2026-04-15 — Phase 2 Launch Day: Task Browser, Unlock Detection, WikiSync
+
+Browse all 1,422 Demonic Pacts League tasks directly in the panel — filter by area,
+difficulty, and pact-only. The plugin now detects area unlocks in real time via game
+varbits and marks them automatically. WikiSync integration pulls your completed tasks
+from the wiki server on login, so the planner excludes tasks you've already done. Step
+overlays now show a persistent HUD with the current task name, difficulty, area badge,
+and wiki link. Proximity sorting for multi-task plans runs twice as fast.
+
+### Added
+
+- **Task browser** — new collapsible "Browse Tasks" section in GoalsPanel. Shows all
+  tasks in the DB with area/difficulty/pact-only filters and 50-task paged loading.
+  Backed by `TaskRepository.findFiltered()` with stable point-descending sort.
+- **`StepInstructionOverlay`** — always-on HUD overlay (top-left) showing the current
+  step name, step counter (N / M), difficulty + area badge, and wiki URL shortcut when
+  the step has no spatial targets.
+- **`LeagueStatusMonitor`** — watches `LEAGUE_AREA_SELECTION_0..5` varbits and calls
+  `GoalStore.markUnlocked()` when an area unlock fires in-game. Reads all slots on
+  startup so pre-existing unlocks are picked up immediately.
+- **`WikiSyncTaskLoader`** — background service that fetches completed task IDs from
+  `sync.runescape.wiki` on login. Matches against the local DB so the planner
+  automatically excludes tasks you've already completed.
+- **`AreaHubs`** — representative WorldPoints for each Leagues VI region, used as
+  fallback minimap targets when a task has no scraped precise location.
+- **`TaskRepository.findFiltered()`** — new interface method + implementation with
+  area (case-insensitive), difficulty set, pact-only, and offset/limit pagination.
+
+### Changed
+
+- **Scraper: area attribute** — `HtmlParser` now reads `data-league-area-for-filtering`
+  (live wiki attribute) instead of the old `data-tbz-area-for-filtering`, fixing area
+  distribution across all 11 regions.
+- **Scraper: pact tasks** — `HtmlParser` reads `data-pact-task` attribute and marks
+  the 75 pact tasks with `category = "pact"`.
+- **Scraper: item requirements** — `TaskNormalizer.parseItemRequirements()` extracts
+  item requirement strings (e.g. "Any axe") from the requirements column.
+- **Scraper: difficulty** — `HtmlParser` falls back to `data-league-tier` attribute
+  before image-based difficulty detection, making scraping more robust.
+- **`PlannerOptimizer`** — nearest-neighbor walk now uses squared distance (no
+  `Math.sqrt`) and pre-computes hub WorldPoints once per sort instead of per-comparison.
+  Net ~2x speedup for 50-task plans.
+- **`PlayerContextAssembler`** — `getCompletedTasksSnapshot()` and
+  `getUnlockedAreasSnapshot()` are now synchronized to prevent
+  `ConcurrentModificationException` when WikiSyncTaskLoader writes concurrently.
+- **`ChatService.maybeMarkCompleted`** — returns `false` when no task name matched,
+  allowing the LLM to respond instead of swallowing the message.
+- **Session restore + build activate** — `OverlayController.setPlanSize()` is now
+  called before `setActiveStep()` in both paths so the HUD shows the correct Step N/M.
+
+### Fixed
+
+- `WikiSyncTaskLoader` username URL-encodes spaces in RSNs (e.g. "Iron Man") to
+  prevent malformed HTTP requests and silent failures.
+- `TaskBrowserPanel` initial difficulty set excludes MASTER (no UI button) so MASTER
+  tasks are not silently hidden after the first filter interaction.
+- `TaskRepositoryImpl.findFiltered` sorts results before pagination for stable page
+  order across "Load more" clicks.
+- `DatabaseLoader` logs malformed task rows to stderr instead of swallowing them silently.
+- `WikiSyncTaskLoader` shuts down its background executor on plugin teardown.
+
 ## [0.4.0.0] — 2026-04-13 — PR 5: CRAFT Goals, Leagues Mode, Inventory Auto-Advance
 
 You can now say "make a staff of air" or "smith rune platebody" and the plugin looks
