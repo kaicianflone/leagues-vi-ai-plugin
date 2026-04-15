@@ -82,7 +82,13 @@ public class HtmlParser {
         Document doc = Jsoup.parse(html);
         Elements tables = doc.select("table.tbrl-tasks");
         if (tables.isEmpty()) {
-            // Fallback: if no tbrl-tasks class, try all wikitables (older formats)
+            // Demonic Pacts League uses table.league-tasks. Try that before
+            // falling back to the generic wikitable selector so we don't pick
+            // up guide/navbox tables that share the wikitable class.
+            tables = doc.select("table.league-tasks");
+        }
+        if (tables.isEmpty()) {
+            // Fallback: if no league-specific class, try all wikitables (older formats)
             tables = doc.select("table.wikitable");
         }
 
@@ -94,7 +100,14 @@ public class HtmlParser {
 
                 TaskRow tr = new TaskRow();
                 tr.taskId = row.attr("data-taskid");
-                tr.area = row.attr("data-tbz-area-for-filtering");
+                // Demonic Pacts League uses data-league-area-for-filtering.
+                // Prior leagues used data-tbz-area-for-filtering — keep fallback for
+                // historical compatibility if this parser is ever run against old pages.
+                tr.area = row.attr("data-league-area-for-filtering");
+                if (tr.area == null || tr.area.isEmpty()) {
+                    tr.area = row.attr("data-tbz-area-for-filtering");
+                }
+                tr.isPactTask = "yes".equalsIgnoreCase(row.attr("data-pact-task"));
 
                 // Column 1: Name (e.g., "1 Easy Clue Scroll")
                 if (cells.size() > 1) {
@@ -108,17 +121,25 @@ public class HtmlParser {
                 if (cells.size() > 3) {
                     tr.requirements = cells.get(3).text().trim();
                 }
-                // Column 4: Points (with tier image) — extract both
+                // Column 4: Points (with tier image) — extract both.
+                // Prefer data-league-tier attribute (Demonic Pacts); fall back to image
+                // src pattern (Trailblazer Reloaded and earlier leagues).
+                String tierAttr = row.attr("data-league-tier");
+                if (tierAttr != null && !tierAttr.isEmpty()) {
+                    tr.difficulty = tierAttr.toLowerCase();
+                }
                 if (cells.size() > 4) {
                     Element pointsCell = cells.get(4);
                     tr.points = parsePoints(pointsCell.text());
-                    // Look for tier image: <img src="...tasks_-_Easy.png">
-                    Element img = pointsCell.selectFirst("img");
-                    if (img != null) {
-                        String src = img.attr("src");
-                        Matcher m = TIER_IMG_PATTERN.matcher(src);
-                        if (m.find()) {
-                            tr.difficulty = m.group(1).toLowerCase();
+                    if (tr.difficulty == null) {
+                        // Image-based fallback for older league pages
+                        Element img = pointsCell.selectFirst("img");
+                        if (img != null) {
+                            String src = img.attr("src");
+                            Matcher m = TIER_IMG_PATTERN.matcher(src);
+                            if (m.find()) {
+                                tr.difficulty = m.group(1).toLowerCase();
+                            }
                         }
                     }
                 }
@@ -153,6 +174,8 @@ public class HtmlParser {
         public String area;
         public String difficulty;
         public int points;
+        /** True if this task awards a Demonic Pact (data-pact-task="yes"). */
+        public boolean isPactTask;
     }
 
     // =========================================================================

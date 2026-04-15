@@ -283,4 +283,79 @@ public class HtmlParserTest {
     public void testParsePactsPage_emptyHtmlReturnsEmptyList() {
         assertTrue(HtmlParser.parsePactsPage("").isEmpty());
     }
+
+    // ------------------------------------------------------------------
+    // parseTaskTableRich — Demonic Pacts League attribute fixes (Phase 2)
+    // ------------------------------------------------------------------
+
+    private static final String DEMONIC_PACTS_TASK_HTML =
+        "<html><body>" +
+        "<table class=\"wikitable league-tasks\">" +
+        "  <tr>" +
+        "    <th>Area</th><th>Name</th><th>Task</th><th>Requirements</th><th>Points</th>" +
+        "  </tr>" +
+        "  <tr data-taskid=\"100\" data-league-area-for-filtering=\"asgarnia\"" +
+        "      data-league-tier=\"hard\" data-pact-task=\"no\">" +
+        "    <td>Area</td><td>Defeat the Black Knight Titan</td>" +
+        "    <td>Defeat the Black Knight Titan near Ice Mountain.</td>" +
+        "    <td>None</td>" +
+        "    <td><img src=\"tasks-Hard.png\">75</td>" +
+        "  </tr>" +
+        "  <tr data-taskid=\"200\" data-league-area-for-filtering=\"kandarin\"" +
+        "      data-league-tier=\"elite\" data-pact-task=\"yes\">" +
+        "    <td>Area</td><td>Obtain the Pact of Kandarin</td>" +
+        "    <td>Complete the Kandarin pact requirement.</td>" +
+        "    <td>None</td>" +
+        "    <td>200</td>" +
+        "  </tr>" +
+        "</table>" +
+        "</body></html>";
+
+    @Test
+    public void testParseTaskTableRich_leagueAreaAttribute() {
+        List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(DEMONIC_PACTS_TASK_HTML);
+        assertEquals("Expected 2 task rows", 2, rows.size());
+        assertEquals("asgarnia", rows.get(0).area);
+        assertEquals("kandarin", rows.get(1).area);
+    }
+
+    @Test
+    public void testParseTaskTableRich_dataLeagueTierAttribute() {
+        List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(DEMONIC_PACTS_TASK_HTML);
+        assertEquals("hard", rows.get(0).difficulty);
+        assertEquals("elite", rows.get(1).difficulty);
+    }
+
+    @Test
+    public void testParseTaskTableRich_pactTaskFlag_false() {
+        List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(DEMONIC_PACTS_TASK_HTML);
+        assertFalse("data-pact-task=no should parse as false", rows.get(0).isPactTask);
+    }
+
+    @Test
+    public void testParseTaskTableRich_pactTaskFlag_true() {
+        List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(DEMONIC_PACTS_TASK_HTML);
+        assertTrue("data-pact-task=yes should parse as true", rows.get(1).isPactTask);
+    }
+
+    @Test
+    public void testParseTaskTableRich_leagueTasksTablePreferredOverWikitable() {
+        // Verify the table.league-tasks selector is used when present, not just table.wikitable
+        String html =
+            "<html><body>" +
+            "<table class=\"wikitable\">" +
+            "  <tr><td>Should not appear</td><td>x</td><td>x</td></tr>" +
+            "</table>" +
+            "<table class=\"wikitable league-tasks\">" +
+            "  <tr data-taskid=\"1\" data-league-area-for-filtering=\"wilderness\"" +
+            "      data-league-tier=\"easy\" data-pact-task=\"no\">" +
+            "    <td>x</td><td>Correct Task</td><td>desc</td><td>none</td><td>10</td>" +
+            "  </tr>" +
+            "</table>" +
+            "</body></html>";
+        List<HtmlParser.TaskRow> rows = HtmlParser.parseTaskTableRich(html);
+        assertEquals("Should only return rows from league-tasks table", 1, rows.size());
+        assertEquals("Correct Task", rows.get(0).name);
+        assertEquals("wilderness", rows.get(0).area);
+    }
 }
