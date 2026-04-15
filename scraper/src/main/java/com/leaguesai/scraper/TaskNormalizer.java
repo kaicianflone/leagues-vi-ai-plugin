@@ -1,7 +1,12 @@
 package com.leaguesai.scraper;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,6 +56,51 @@ public class TaskNormalizer {
             String skill = matcher.group(2).toLowerCase();
             skill = SKILL_ALIASES.getOrDefault(skill, skill);
             result.put(skill, level);
+        }
+        return result;
+    }
+
+    /**
+     * Parses item requirements from a requirements cell. Returns any non-skill,
+     * non-trivial requirement tokens as plain strings.
+     *
+     * <p>Strategy: split the requirements text on common delimiters, then drop any
+     * token that (a) is blank, (b) is "N/A" / "-", or (c) is already captured by
+     * {@link #parseSkillRequirements} (i.e. it matched a "level skill" pair). What
+     * remains is treated as an item or equipment requirement.
+     *
+     * <p>Example: {@code "Any axe"} → {@code ["Any axe"]}
+     * {@code "9 Magic"} → {@code []} (skill, not item)
+     * {@code "9 Magic, Any axe"} → {@code ["Any axe"]}
+     *
+     * @param reqText   raw requirements cell text
+     * @param knownSkillKeys skill names already parsed by parseSkillRequirements,
+     *                       used to suppress false-positive item matches
+     * @return list of item requirement strings; empty list if none
+     */
+    public static List<String> parseItemRequirements(String reqText, Set<String> knownSkillKeys) {
+        if (reqText == null || reqText.trim().isEmpty()
+                || reqText.trim().equalsIgnoreCase("n/a")
+                || reqText.trim().equals("-")) {
+            return Collections.emptyList();
+        }
+
+        // Remove tokens already claimed by skill requirement parsing (e.g. "9 Magic")
+        String cleaned = reqText;
+        Matcher skillMatcher = SKILL_REQ_PATTERN.matcher(reqText);
+        while (skillMatcher.find()) {
+            // Replace the "N SkillName" match with a placeholder to preserve surrounding text
+            cleaned = cleaned.replace(skillMatcher.group(0), "");
+        }
+
+        List<String> result = new ArrayList<>();
+        // Split on commas, semicolons, or " and "
+        for (String token : cleaned.split("[,;]|\\band\\b")) {
+            String t = token.trim();
+            if (t.isEmpty() || t.equalsIgnoreCase("n/a") || t.equals("-")) continue;
+            // Drop anything that looks like just a skill name leftover (single word matching a skill)
+            if (knownSkillKeys != null && knownSkillKeys.contains(t.toLowerCase())) continue;
+            result.add(t);
         }
         return result;
     }

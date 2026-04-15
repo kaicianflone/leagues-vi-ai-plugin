@@ -12,8 +12,10 @@ import com.leaguesai.data.model.Task;
 import com.leaguesai.overlay.*;
 import com.leaguesai.ui.*;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
@@ -56,6 +58,8 @@ public class LeaguesAiPlugin extends Plugin {
     @Inject private XpMonitor xpMonitor;
     @Inject private InventoryMonitor inventoryMonitor;
     @Inject private LocationMonitor locationMonitor;
+    @Inject private LeagueStatusMonitor leagueStatusMonitor;
+    @Inject private WikiSyncTaskLoader wikiSyncTaskLoader;
 
     @Inject private TileHighlightOverlay tileOverlay;
     @Inject private ArrowOverlay arrowOverlay;
@@ -66,6 +70,7 @@ public class LeaguesAiPlugin extends Plugin {
     @Inject private PathOverlay pathOverlay;
     @Inject private WidgetOverlay widgetOverlay;
     @Inject private RequiredItemsOverlay requiredItemsOverlay;
+    @Inject private StepInstructionOverlay stepInstructionOverlay;
     @Inject private OverlayController overlayController;
 
     @Inject private PlayerContextAssembler contextAssembler;
@@ -155,6 +160,7 @@ public class LeaguesAiPlugin extends Plugin {
         eventBus.register(xpMonitor);
         eventBus.register(inventoryMonitor);
         eventBus.register(locationMonitor);
+        eventBus.register(leagueStatusMonitor);
 
         // Overlays that maintain caches via spawn/despawn events must be on the bus
         eventBus.register(objectOverlay);
@@ -172,6 +178,7 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.add(pathOverlay);
         overlayManager.add(widgetOverlay);
         overlayManager.add(requiredItemsOverlay);
+        overlayManager.add(stepInstructionOverlay);
 
         // Initialise the database seeder (seeds on first run before loading)
         databaseSeeder = new DatabaseSeeder();
@@ -209,6 +216,10 @@ public class LeaguesAiPlugin extends Plugin {
             File goalsFile = new File(System.getProperty("user.home"),
                 ".runelite/leagues-ai/data/goals.json");
             goalStore = new GoalStore(goalsFile);
+            leagueStatusMonitor.setGoalStore(goalStore);
+            wikiSyncTaskLoader.setContextAssembler(contextAssembler);
+            wikiSyncTaskLoader.setTaskRepository(taskRepo);
+            wikiSyncTaskLoader.loadCompletedTasks(); // fetch once DB is ready
             vectorIndex = new VectorIndex(embeddings);
             ItemDependencyGraph itemDependencyGraph = new ItemDependencyGraph(dbFile);
             itemDependencyGraph.loadFromDb();
@@ -306,6 +317,7 @@ public class LeaguesAiPlugin extends Plugin {
                 unlock.setLeaguesMode(config.leaguesMode());
                 unlockablesPanel = unlock;
                 panel.getGoalsPanel().setUnlockablesPanel(unlock);
+                panel.getGoalsPanel().setTaskRepository(taskRepo);
                 // Restore any goals queued in a prior session
                 refreshGoalQueueBar();
             });
@@ -806,7 +818,8 @@ public class LeaguesAiPlugin extends Plugin {
 
         PlannedStep first = steps.get(0);
         if (first != null && overlayController != null) {
-            SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first));
+            overlayController.setPlanSize(total);
+            SwingUtilities.invokeLater(() -> overlayController.setActiveStep(first, 0));
             log.info("Plan callback: activating first step '{}' — location={}, npcIds={}, objIds={}",
                     first.getInstruction(),
                     first.getDestination(),
@@ -883,7 +896,8 @@ public class LeaguesAiPlugin extends Plugin {
             }
             PlannedStep first = finalSteps.isEmpty() ? null : finalSteps.get(0);
             if (first != null && overlayController != null) {
-                overlayController.setActiveStep(first);
+                overlayController.setPlanSize(finalSteps.size());
+                overlayController.setActiveStep(first, 0);
             }
         });
         log.info("Restored session plan: '{}' with {} steps", finalGoal, steps.size());
@@ -969,7 +983,8 @@ public class LeaguesAiPlugin extends Plugin {
                         panel.switchToGoalsTab();
                     }
                     if (!finalSteps.isEmpty() && overlayController != null) {
-                        overlayController.setActiveStep(finalSteps.get(0));
+                        overlayController.setPlanSize(total);
+                        overlayController.setActiveStep(finalSteps.get(0), 0);
                     }
                 });
                 log.info("activateBuild: activated '{}' with {} steps", buildName, total);
@@ -1285,6 +1300,46 @@ public class LeaguesAiPlugin extends Plugin {
     public void onGameStateChanged(GameStateChanged event) {
         if (event.getGameState() == GameState.LOGGED_IN) {
             xpMonitor.initialize();
+            leagueStatusMonitor.initialize();
+            // Re-fetch completed tasks from WikiSync on each login so pre-existing
+            // completions are always reflected without requiring an in-session completion.
+            wikiSyncTaskLoader.loadCompletedTasks();
+        }
+    }
+
+    /**
+     * Detect league task completion via the in-game chat message broadcast.
+     * Leagues VI sends: "You have completed the task: <name>." as a GAMEMESSAGE.
+     * We look up the task by name and call markTaskCompleted so the next plan
+     * automatically excludes it from the step list.
+     */
+    @Subscribe
+    public void onChatMessage(ChatMessage event) {
+        if (event.getType() != ChatMessageType.GAMEMESSAGE) return;
+        String msg = event.getMessage();
+        if (msg == null) return;
+        // Strip HTML colour tags RuneLite injects
+        String clean = msg.replaceAll("<[^>]+>", "").trim();
+        if (!clean.startsWith("You have completed the task:")) return;
+
+        // Extract task name: "You have completed the task: <name>."
+        int colon = clean.indexOf(':');
+        if (colon < 0) return;
+        String taskName = clean.substring(colon + 1).trim();
+        if (taskName.endsWith(".")) taskName = taskName.substring(0, taskName.length() - 1).trim();
+
+        log.info("LeaguesAI: task completion detected via chat — '{}'", taskName);
+
+        if (taskRepo == null) return;
+        final String finalTaskName = taskName;
+        List<Task> all = taskRepo.getAllTasks();
+        if (all == null) return;
+        for (Task t : all) {
+            if (finalTaskName.equalsIgnoreCase(t.getName())) {
+                log.info("LeaguesAI: marking task completed — id={} name={}", t.getId(), t.getName());
+                contextAssembler.markTaskCompleted(t.getId());
+                break;
+            }
         }
     }
 
@@ -1325,7 +1380,7 @@ public class LeaguesAiPlugin extends Plugin {
                     idx + 1, nextIdx + 1,
                     next.getInstruction() != null ? next.getInstruction() : "(no instruction)");
             SwingUtilities.invokeLater(() -> {
-                if (overlayController != null) overlayController.setActiveStep(next);
+                if (overlayController != null) overlayController.setActiveStep(next, nextIdx);
                 if (panel != null) panel.getGoalsPanel().setProgress(nextIdx, plan.size());
                 if (panel != null) panel.setProgress(nextIdx, plan.size());
             });
@@ -1348,6 +1403,8 @@ public class LeaguesAiPlugin extends Plugin {
         eventBus.unregister(xpMonitor);
         eventBus.unregister(inventoryMonitor);
         eventBus.unregister(locationMonitor);
+        eventBus.unregister(leagueStatusMonitor);
+        wikiSyncTaskLoader.shutdown();
         eventBus.unregister(objectOverlay);
         eventBus.unregister(groundItemOverlay);
         eventBus.unregister(arrowOverlay);
@@ -1361,6 +1418,7 @@ public class LeaguesAiPlugin extends Plugin {
         overlayManager.remove(pathOverlay);
         overlayManager.remove(widgetOverlay);
         overlayManager.remove(requiredItemsOverlay);
+        overlayManager.remove(stepInstructionOverlay);
 
         overlayController.clearAll();
 

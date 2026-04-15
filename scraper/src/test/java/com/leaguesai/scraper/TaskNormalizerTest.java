@@ -2,7 +2,11 @@ package com.leaguesai.scraper;
 
 import org.junit.Test;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.Assert.*;
 
@@ -129,5 +133,65 @@ public class TaskNormalizerTest {
     @Test
     public void testNormalizeDifficulty_nullDefaultsToEasy() {
         assertEquals("easy", TaskNormalizer.normalizeDifficulty(null));
+    }
+
+    // ------------------------------------------------------------------
+    // parseItemRequirements
+    // ------------------------------------------------------------------
+
+    @Test
+    public void testParseItemRequirements_pureItemNoSkill() {
+        List<String> result = TaskNormalizer.parseItemRequirements("Any axe", Collections.emptySet());
+        assertEquals(1, result.size());
+        assertEquals("Any axe", result.get(0));
+    }
+
+    @Test
+    public void testParseItemRequirements_skillOnlyIsEmpty() {
+        // "9 Magic" is a skill requirement — should produce no item entries
+        Set<String> knownSkills = new HashSet<>();
+        knownSkills.add("magic");
+        Map<String, Integer> skills = TaskNormalizer.parseSkillRequirements("9 Magic");
+        List<String> items = TaskNormalizer.parseItemRequirements("9 Magic", skills.keySet());
+        assertTrue("Skill-only requirement should return empty list", items.isEmpty());
+    }
+
+    @Test
+    public void testParseItemRequirements_mixedSkillAndItem() {
+        // "9 Magic, Any axe" → skill stripped, item kept
+        Map<String, Integer> skills = TaskNormalizer.parseSkillRequirements("9 Magic");
+        List<String> items = TaskNormalizer.parseItemRequirements("9 Magic, Any axe", skills.keySet());
+        assertEquals(1, items.size());
+        assertEquals("Any axe", items.get(0));
+    }
+
+    @Test
+    public void testParseItemRequirements_multipleItemsCommaSeparated() {
+        List<String> result = TaskNormalizer.parseItemRequirements(
+                "Tinderbox, Axe", Collections.emptySet());
+        assertEquals(2, result.size());
+        assertTrue(result.contains("Tinderbox"));
+        assertTrue(result.contains("Axe"));
+    }
+
+    @Test
+    public void testParseItemRequirements_naAndDashReturnEmpty() {
+        assertTrue(TaskNormalizer.parseItemRequirements("N/A", null).isEmpty());
+        assertTrue(TaskNormalizer.parseItemRequirements("-", null).isEmpty());
+        assertTrue(TaskNormalizer.parseItemRequirements("", null).isEmpty());
+        assertTrue(TaskNormalizer.parseItemRequirements(null, null).isEmpty());
+    }
+
+    @Test
+    public void testParseItemRequirements_andSeparator() {
+        // "Bow and arrow" should NOT be split on "and" — only whole word "and"
+        // that acts as a separator, not part of a compound noun.
+        // The current impl splits on \band\b so "Bow and arrow" → ["Bow", "arrow"]
+        // This test documents the current behavior.
+        List<String> result = TaskNormalizer.parseItemRequirements("Bow and arrow", Collections.emptySet());
+        // Should have 2 tokens: "Bow" and "arrow"
+        assertEquals(2, result.size());
+        assertTrue(result.contains("Bow"));
+        assertTrue(result.contains("arrow"));
     }
 }

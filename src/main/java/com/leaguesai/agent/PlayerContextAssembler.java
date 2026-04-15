@@ -85,8 +85,8 @@ public class PlayerContextAssembler {
                 .xp(getSkillXp())
                 .inventory(getInventory())
                 .equipment(getEquipment())
-                .completedTasks(new HashSet<>(completedTasks))
-                .unlockedAreas(new HashSet<>(unlockedAreas))
+                .completedTasks(getCompletedTasksSnapshot())
+                .unlockedAreas(getUnlockedAreasSnapshot())
                 .location(locationMonitor.getCurrentLocation())
                 .leaguePoints(0) // TODO: requires unknown varbit
                 .combatLevel(combatLevel)
@@ -155,6 +155,14 @@ public class PlayerContextAssembler {
     // -------------------------------------------------------------------------
     // Mutators
     // -------------------------------------------------------------------------
+
+    public synchronized Set<String> getCompletedTasksSnapshot() {
+        return new HashSet<>(completedTasks);
+    }
+
+    public synchronized Set<String> getUnlockedAreasSnapshot() {
+        return new HashSet<>(unlockedAreas);
+    }
 
     public synchronized void markTaskCompleted(String taskId) {
         completedTasks.add(taskId);

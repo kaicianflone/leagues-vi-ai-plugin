@@ -1,14 +1,13 @@
 package com.leaguesai.scraper;
 
 import okhttp3.OkHttpClient;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
 
 import java.io.File;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Entry point for the standalone wiki scraper tool.
@@ -93,11 +92,19 @@ public class WikiScraper {
 
             String html;
             try {
-                Document doc = Jsoup.connect(url)
-                        .userAgent("leagues-vi-ai-scraper/1.0 (github.com/leagues-vi-ai)")
-                        .timeout(30_000)
-                        .get();
-                html = doc.outerHtml();
+                // Use OkHttp directly: Jsoup.connect().get() returns truncated content
+                // (~1422 rows) on the 2.4 MB tasks page; fetching the raw body first
+                // and parsing with Jsoup.parse() returns all 1592 rows.
+                okhttp3.Request req = new okhttp3.Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "leagues-vi-ai-scraper/1.0 (github.com/leagues-vi-ai)")
+                        .build();
+                try (okhttp3.Response resp = httpClient.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null) {
+                        throw new IOException("HTTP " + resp.code());
+                    }
+                    html = resp.body().string();
+                }
             } catch (IOException e) {
                 System.err.println("  ERROR fetching page: " + e.getMessage());
                 totalErrors++;
@@ -153,6 +160,12 @@ public class WikiScraper {
                             taskItemExtractor.extract(name, description);
                     String targetItemsJson = buildItemTargetsJson(itemTargets);
 
+                    String itemsJson = buildItemsRequiredJson(
+                            TaskNormalizer.parseItemRequirements(
+                                    row.requirements != null ? row.requirements : "",
+                                    skillsReq.keySet()));
+                    String category = row.isPactTask ? "pact" : null;
+
                     writer.upsertTaskWithId(
                             stableId,
                             name,
@@ -160,11 +173,11 @@ public class WikiScraper {
                             difficulty,
                             points,
                             rowArea,
-                            null,            // category — not parsed from wiki yet
+                            category,
                             skillsJson,
                             null,            // quests_required
                             null,            // tasks_required
-                            null,            // items_required
+                            itemsJson,
                             locationJson,
                             null,            // target_npcs
                             null,            // target_objects
@@ -249,6 +262,24 @@ public class WikiScraper {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Builds a JSON array string from item requirement strings (non-skill requirements
+     * from the requirements column). Returns null if the list is empty.
+     * Example: {@code ["Any axe","Tinderbox"]}
+     */
+    private static String buildItemsRequiredJson(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append(escapeJson(items.get(i))).append('"');
+        }
+        sb.append("]");
+        return sb.toString();
+    }
 
     /**
      * Builds a JSON array string from a list of item targets.

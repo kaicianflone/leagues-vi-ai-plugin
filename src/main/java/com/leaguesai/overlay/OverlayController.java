@@ -20,6 +20,11 @@ public class OverlayController {
     private final PathOverlay pathOverlay;
     private final WidgetOverlay widgetOverlay;
     private final RequiredItemsOverlay requiredItemsOverlay;
+    private final StepInstructionOverlay stepInstructionOverlay;
+
+    // Track plan size for the HUD step counter
+    private volatile int planTotal = 0;
+    private volatile int planIndex = 0;
 
     @Inject
     public OverlayController(
@@ -32,7 +37,8 @@ public class OverlayController {
         WorldMapOverlay worldMapOverlay,
         PathOverlay pathOverlay,
         WidgetOverlay widgetOverlay,
-        RequiredItemsOverlay requiredItemsOverlay
+        RequiredItemsOverlay requiredItemsOverlay,
+        StepInstructionOverlay stepInstructionOverlay
     ) {
         this.tileHighlightOverlay = tileHighlightOverlay;
         this.arrowOverlay = arrowOverlay;
@@ -44,27 +50,48 @@ public class OverlayController {
         this.pathOverlay = pathOverlay;
         this.widgetOverlay = widgetOverlay;
         this.requiredItemsOverlay = requiredItemsOverlay;
+        this.stepInstructionOverlay = stepInstructionOverlay;
+    }
+
+    /** Call once when a new plan is activated so the HUD shows correct N/M. */
+    public void setPlanSize(int total) {
+        this.planTotal = total;
+        this.planIndex = 0;
     }
 
     public void setActiveStep(PlannedStep step) {
+        setActiveStep(step, planIndex);
+    }
+
+    public void setActiveStep(PlannedStep step, int index) {
         clearAll();
+        this.planIndex = index;
         if (step == null) {
             return;
         }
+        // HUD instruction panel — always shown regardless of spatial data
+        stepInstructionOverlay.setActiveStep(step, index, planTotal);
         OverlayData data = step.getOverlayData();
         if (data == null) {
             return;
         }
+        // targetTile = precise scraped location (tile highlight only).
+        // destination = precise OR area hub fallback (arrow, minimap, world map).
+        net.runelite.api.coords.WorldPoint waypointTile =
+                data.getTargetTile() != null ? data.getTargetTile() : step.getDestination();
+
         if (data.getTargetTile() != null) {
             tileHighlightOverlay.setTargetTile(data.getTargetTile());
+        }
+        if (waypointTile != null) {
             if (data.isShowArrow()) {
-                arrowOverlay.setTargetTile(data.getTargetTile());
+                arrowOverlay.setTargetTile(waypointTile);
             }
             if (data.isShowMinimap()) {
-                minimapOverlay.setTargetPoint(data.getTargetTile());
+                minimapOverlay.setTargetPoint(waypointTile);
             }
             if (data.isShowWorldMap()) {
-                worldMapOverlay.update(data.getTargetTile(), null);
+                worldMapOverlay.update(waypointTile, null);
             }
         }
         if (data.getTargetNpcIds() != null && !data.getTargetNpcIds().isEmpty()) {
@@ -110,5 +137,6 @@ public class OverlayController {
         pathOverlay.clear();
         widgetOverlay.clear();
         requiredItemsOverlay.clear();
+        stepInstructionOverlay.clear();
     }
 }

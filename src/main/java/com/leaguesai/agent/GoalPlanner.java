@@ -947,12 +947,12 @@ public class GoalPlanner {
 
         String lowerGoal = goal.toLowerCase();
 
-        // Determine difficulty filter if present
-        Difficulty difficultyFilter = null;
+        // Collect ALL difficulty tiers mentioned in the goal ("easy and medium", "hard elite", etc.)
+        // Prior code broke on first match, so "easy and medium" only returned easy tasks.
+        Set<Difficulty> difficultyFilter = new java.util.LinkedHashSet<>();
         for (Difficulty d : Difficulty.values()) {
             if (lowerGoal.contains(d.name().toLowerCase())) {
-                difficultyFilter = d;
-                break;
+                difficultyFilter.add(d);
             }
         }
 
@@ -963,7 +963,7 @@ public class GoalPlanner {
         List<Task> results = new ArrayList<>();
         for (Task task : allTasks) {
             if (task.getArea() != null && lowerGoal.contains(task.getArea().toLowerCase())) {
-                if (difficultyFilter == null || difficultyFilter.equals(task.getDifficulty())) {
+                if (difficultyFilter.isEmpty() || difficultyFilter.contains(task.getDifficulty())) {
                     results.add(task);
                 }
             }

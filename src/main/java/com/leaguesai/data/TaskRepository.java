@@ -8,6 +8,7 @@ import com.leaguesai.data.model.Task;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 public interface TaskRepository {
     List<Task> getAllTasks();
@@ -46,4 +47,17 @@ public interface TaskRepository {
      * risk (e.g. id 657 will never match id 6570).
      */
     List<Task> findByTargetItemId(int wikiItemId);
+
+    /**
+     * Returns tasks matching all supplied filters. Null / empty values mean
+     * "no filter on that dimension". Comparison is case-insensitive for area.
+     *
+     * @param area        exact area slug to match, or null for all areas
+     * @param difficulties set of Difficulty values to include, or null/empty for all
+     * @param pactOnly    if true, only return tasks whose category is "pact"
+     * @param offset      0-based page offset (multiply by limit for pagination)
+     * @param limit       max results to return
+     */
+    List<Task> findFiltered(String area, Set<Difficulty> difficulties,
+                            boolean pactOnly, int offset, int limit);
 }
