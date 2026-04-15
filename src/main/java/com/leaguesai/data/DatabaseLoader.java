@@ -57,10 +57,14 @@ public class DatabaseLoader {
              ResultSet rs = stmt.executeQuery("SELECT * FROM tasks")) {
 
             while (rs.next()) {
-                tasks.add(parseTask(rs));
+                try {
+                    tasks.add(parseTask(rs));
+                } catch (Exception rowErr) {
+                    System.err.println("DatabaseLoader: skipping malformed task row: " + rowErr.getMessage());
+                }
             }
         } catch (Exception e) {
-            // Return whatever was collected; log silently.
+            // Connection / query failure — return whatever was collected.
         }
         return tasks;
     }
@@ -267,6 +271,25 @@ public class DatabaseLoader {
     private Map<String, Integer> parseStringIntMap(String json) {
         if (json == null || json.isEmpty()) {
             return null;
+        }
+        String trimmed = json.trim();
+        // JSON array format ["item1","item2"] — written by the Phase 2 scraper
+        // for items_required. Convert to map with quantity 1 for each entry so
+        // downstream consumers (GoalAccordion, ItemSourceResolver) work unchanged.
+        if (trimmed.startsWith("[")) {
+            try {
+                JsonArray arr = GSON.fromJson(trimmed, JsonArray.class);
+                Map<String, Integer> result = new java.util.LinkedHashMap<>();
+                for (JsonElement el : arr) {
+                    String key = el.getAsString();
+                    if (key != null && !key.isEmpty()) {
+                        result.put(key, 1);
+                    }
+                }
+                return result.isEmpty() ? null : result;
+            } catch (Exception e) {
+                return null;
+            }
         }
         Type type = new TypeToken<Map<String, Integer>>() {}.getType();
         return GSON.fromJson(json, type);

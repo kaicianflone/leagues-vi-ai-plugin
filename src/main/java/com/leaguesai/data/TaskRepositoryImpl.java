@@ -8,6 +8,7 @@ import com.leaguesai.data.model.Task;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -18,6 +19,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class TaskRepositoryImpl implements TaskRepository {
 
@@ -226,6 +228,26 @@ public class TaskRepositoryImpl implements TaskRepository {
                         task.getTargetItems().stream()
                                 .anyMatch(it -> it.getId() == wikiItemId))
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Task> findFiltered(String area, Set<Difficulty> difficulties,
+                                   boolean pactOnly, int offset, int limit) {
+        Stream<Task> stream = tasksById.values().stream();
+        if (area != null && !area.isEmpty()) {
+            stream = stream.filter(t -> area.equalsIgnoreCase(t.getArea()));
+        }
+        if (difficulties != null && !difficulties.isEmpty()) {
+            stream = stream.filter(t -> difficulties.contains(t.getDifficulty()));
+        }
+        if (pactOnly) {
+            stream = stream.filter(t -> "pact".equalsIgnoreCase(t.getCategory()));
+        }
+        // Sort for stable pagination — consistent order across "Load more" clicks.
+        return stream
+                .sorted(Comparator.comparingInt((Task t) -> t.getPoints() == 0 ? Integer.MAX_VALUE : -t.getPoints())
+                        .thenComparing(t -> t.getName() != null ? t.getName() : ""))
+                .skip(offset).limit(limit).collect(Collectors.toList());
     }
 
     @Override
