@@ -1,6 +1,7 @@
 package com.leaguesai.ui;
 
 import com.leaguesai.agent.PlannedStep;
+import com.leaguesai.data.TaskRepository;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -66,6 +67,9 @@ public class GoalsPanel extends JPanel {
     // Top-left clear-plan button (visible when a plan is active)
     private final JButton clearPlanButton;
     private Runnable onClearPlan;
+
+    // Task browser (injected after TaskRepository is ready)
+    private java.awt.Component taskBrowserSlot;
 
     private Runnable onOpenChat;
     private Runnable onBrowseBuilds;
@@ -253,6 +257,9 @@ public class GoalsPanel extends JPanel {
         centerColumn.add(javax.swing.Box.createVerticalStrut(4));
         centerColumn.add(emptyStateLabel);
         centerColumn.add(accordion);
+        centerColumn.add(javax.swing.Box.createVerticalStrut(6));
+        taskBrowserSlot = javax.swing.Box.createVerticalStrut(0);
+        centerColumn.add(taskBrowserSlot);
 
         JScrollPane scroll = new JScrollPane(centerColumn);
         scroll.setBorder(null);
@@ -432,6 +439,31 @@ public class GoalsPanel extends JPanel {
             goalQueuePanel.setVisible(true);
             goalQueuePanel.revalidate();
             goalQueuePanel.repaint();
+        });
+    }
+
+    /**
+     * Injects the task repository and mounts the task browser panel below the
+     * accordion. Safe to call from any thread — swaps the placeholder strut.
+     */
+    public void setTaskRepository(TaskRepository taskRepo) {
+        SwingUtilities.invokeLater(() -> {
+            if (centerColumn == null || taskBrowserSlot == null) return;
+            int idx = -1;
+            for (int i = 0; i < centerColumn.getComponentCount(); i++) {
+                if (centerColumn.getComponent(i) == taskBrowserSlot) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0) return;
+            centerColumn.remove(idx);
+            TaskBrowserPanel browser = new TaskBrowserPanel(taskRepo);
+            browser.setAlignmentX(Component.LEFT_ALIGNMENT);
+            centerColumn.add(browser, idx);
+            taskBrowserSlot = browser;
+            centerColumn.revalidate();
+            centerColumn.repaint();
         });
     }
 
