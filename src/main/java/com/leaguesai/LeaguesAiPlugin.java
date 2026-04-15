@@ -1299,6 +1299,9 @@ public class LeaguesAiPlugin extends Plugin {
     @Subscribe
     public void onGameStateChanged(GameStateChanged event) {
         if (event.getGameState() == GameState.LOGGED_IN) {
+            // Reset per-session state before re-loading so a logout/relog or
+            // account switch doesn't carry over the previous session's completions.
+            contextAssembler.reset();
             xpMonitor.initialize();
             leagueStatusMonitor.initialize();
             // Re-fetch completed tasks from WikiSync on each login so pre-existing
