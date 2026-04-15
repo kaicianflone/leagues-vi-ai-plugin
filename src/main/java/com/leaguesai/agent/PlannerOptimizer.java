@@ -7,67 +7,85 @@ import java.util.*;
 
 public class PlannerOptimizer {
 
-    private PlannerOptimizer() {
-        // Static utility class — not instantiable
-    }
+    private PlannerOptimizer() {}
 
     /**
-     * Optimizes task order by:
-     * 1. Grouping tasks by area
-     * 2. Within each group, sorting by difficulty tier ascending (easy first)
-     * 3. Ordering groups by distance from playerLocation (nearest first)
-     * 4. Flattening and returning the result
+     * Orders tasks by proximity using a greedy nearest-neighbor walk.
      *
-     * Null-safe: tasks with no location are placed last.
-     * If playerLocation is null, distance sort is skipped.
+     * Each task is assigned a representative location:
+     *   1. The scraped precise WorldPoint (t.getLocation()) if present
+     *   2. Otherwise the area hub from {@link AreaHubs}
+     *   3. Otherwise no location (tasks with no location are appended at the end)
+     *
+     * The walk starts from {@code playerLocation} (or the first task if null),
+     * then repeatedly picks the closest unvisited task. This naturally interleaves
+     * difficulty tiers by geography — easy and medium tasks near each other are
+     * visited together rather than all easys then all mediums.
+     *
+     * O(n²) — acceptable for plan sizes up to a few hundred tasks.
      */
     public static List<Task> optimizeOrder(List<Task> tasks, WorldPoint playerLocation) {
         if (tasks == null || tasks.isEmpty()) {
             return Collections.emptyList();
         }
 
-        // Step 1: Group by area
-        LinkedHashMap<String, List<Task>> byArea = new LinkedHashMap<>();
-        for (Task task : tasks) {
-            String area = task.getArea() != null ? task.getArea() : "";
-            byArea.computeIfAbsent(area, k -> new ArrayList<>()).add(task);
+        // Partition: located (have a representative point) vs. unlocated (append at end)
+        List<Task> located = new ArrayList<>();
+        List<Task> unlocated = new ArrayList<>();
+        for (Task t : tasks) {
+            WorldPoint rep = AreaHubs.resolve(t.getLocation(), t.getArea());
+            if (rep != null) {
+                located.add(t);
+            } else {
+                unlocated.add(t);
+            }
         }
 
-        // Step 2: Within each group, sort by difficulty tier ascending
-        for (List<Task> group : byArea.values()) {
-            group.sort(Comparator.comparingInt(t -> {
-                if (t.getDifficulty() == null) return Integer.MAX_VALUE;
-                return t.getDifficulty().getTier();
-            }));
+        if (located.isEmpty()) {
+            // Nothing to reorder — return original order
+            return new ArrayList<>(tasks);
         }
 
-        // Step 3: Order groups by distance from playerLocation (nearest first)
-        // If playerLocation is null, skip distance sort
-        List<Map.Entry<String, List<Task>>> areaEntries = new ArrayList<>(byArea.entrySet());
+        // Pre-compute representative WorldPoints once to avoid O(n²) resolve calls.
+        WorldPoint[] reps = new WorldPoint[located.size()];
+        for (int i = 0; i < located.size(); i++) {
+            reps[i] = AreaHubs.resolve(located.get(i).getLocation(), located.get(i).getArea());
+        }
 
-        if (playerLocation != null) {
-            areaEntries.sort(Comparator.comparingDouble(entry -> {
-                List<Task> group = entry.getValue();
-                // Use the first task with a non-null location as the group's representative
-                WorldPoint firstLoc = null;
-                for (Task t : group) {
-                    if (t.getLocation() != null) {
-                        firstLoc = t.getLocation();
-                        break;
-                    }
+        // Nearest-neighbor greedy walk over located tasks
+        List<Task> ordered = new ArrayList<>(located.size());
+        boolean[] visited = new boolean[located.size()];
+
+        // Starting position: player location, or the first task's location if unknown
+        WorldPoint current = playerLocation != null ? playerLocation : reps[0];
+
+        for (int step = 0; step < located.size(); step++) {
+            int nearestIdx = -1;
+            double nearestDist = Double.MAX_VALUE;
+
+            for (int i = 0; i < located.size(); i++) {
+                if (visited[i] || reps[i] == null) continue;
+                double dist = distSq(current, reps[i]);
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestIdx = i;
                 }
-                // Tasks with no location go last
-                if (firstLoc == null) return Double.MAX_VALUE;
-                return firstLoc.distanceTo(playerLocation);
-            }));
+            }
+
+            if (nearestIdx < 0) break; // shouldn't happen
+            visited[nearestIdx] = true;
+            ordered.add(located.get(nearestIdx));
+            if (reps[nearestIdx] != null) current = reps[nearestIdx];
         }
 
-        // Step 4: Flatten and return
-        List<Task> result = new ArrayList<>();
-        for (Map.Entry<String, List<Task>> entry : areaEntries) {
-            result.addAll(entry.getValue());
-        }
+        // Append tasks without any location data at the end
+        ordered.addAll(unlocated);
+        return ordered;
+    }
 
-        return result;
+    private static double distSq(WorldPoint a, WorldPoint b) {
+        double dx = a.getX() - b.getX();
+        double dy = a.getY() - b.getY();
+        return dx * dx + dy * dy;
     }
 }
